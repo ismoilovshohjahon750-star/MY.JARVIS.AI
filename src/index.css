@@ -1,0 +1,183 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Sophisticated Dark Key Theme Variables */
+:root {
+  --bg: #050505;
+  --accent: #00F2FF;
+  --surface: #111111;
+  --text-dim: #888888;
+}
+
+/* Custom background animation and waveforms */
+@keyframes pulseWave {
+  0%, 100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes scanline {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100vw);
+  }
+}
+
+@keyframes holographicFlicker {
+  0%, 19.999%, 22%, 62.999%, 64%, 64.999%, 70%, 100% {
+    opacity: 0.99;
+    filter: hue-rotate(0deg) saturate(1);
+  }
+  20%, 21.999%, 63%, 63.999%, 65%, 69.999% {
+    opacity: 0.4;
+    filter: hue-rotate(15deg) saturate(1.3) contrast(1.2);
+  }
+}
+
+@keyframes cyberSpinClockwise {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes cyberSpinCounter {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(-360deg); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(0, 242, 255, 0.25);
+    border-color: rgba(0, 242, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 35px rgba(0, 242, 255, 0.55), 0 0 15px rgba(138, 132, 255, 0.3);
+    border-color: rgba(0, 242, 255, 0.82);
+  }
+}
+
+@keyframes textNeonGlow {
+  0%, 100% {
+    text-shadow: 0 0 8px rgba(0, 242, 255, 0.2);
+  }
+  50% {
+    text-shadow: 0 0 16px rgba(0, 242, 255, 0.6), 0 0 5px rgba(0, 242, 255, 0.3);
+  }
+}
+
+.animate-cyber-spin-cw {
+  animation: cyberSpinClockwise 30s linear infinite;
+}
+
+.animate-cyber-spin-ccw {
+  animation: cyberSpinCounter 20s linear infinite;
+}
+
+.animate-holo-flicker {
+  animation: holographicFlicker 8s linear infinite;
+}
+
+.neon-glow-text {
+  animation: textNeonGlow 3s ease-in-out infinite;
+}
+
+.wave-bar {
+  animation: pulseWave 1.2s ease-in-out infinite;
+}
+
+.glass {
+  background: rgba(4, 4, 6, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px);
+}
+
+.glass-hologram {
+  background: linear-gradient(135deg, rgba(0, 242, 255, 0.03) 0%, rgba(138, 132, 255, 0.01) 100%);
+  border: 1px solid rgba(0, 242, 255, 0.12);
+  backdrop-filter: blur(12px);
+  box-shadow: inset 0 0 15px rgba(0, 242, 255, 0.02);
+}
+
+.glass-hologram:hover {
+  border-color: rgba(0, 242, 255, 0.35);
+  box-shadow: inset 0 0 20px rgba(0, 242, 255, 0.05);
+  background: linear-gradient(135deg, rgba(0, 242, 255, 0.05) 0%, rgba(138, 132, 255, 0.02) 100%);
+}
+
+.reactor-pulse-glowing {
+  animation: pulseGlow 3s infinite ease-in-out;
+}
+
+.cyber-grid {
+  background-size: 30px 30px;
+  background-image: 
+    linear-gradient(to right, rgba(0, 242, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 242, 255, 0.015) 1px, transparent 1px);
+}
+
+.cyber-grid-dots {
+  background-size: 20px 20px;
+  background-image: radial-gradient(rgba(0, 242, 255, 0.03) 1px, transparent 1px);
+}
+
+.aura-container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 600px;
+  height: 600px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.aura {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 242, 255, 0.08) 0%, transparent 70%);
+  opacity: 0.65;
+}
+
+.aura-inner {
+  position: absolute;
+  top: 25%;
+  left: 25%;
+  width: 50%;
+  height: 50%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(138, 132, 255, 0.15) 0%, transparent 60%);
+}
+
+body {
+  background-color: var(--bg);
+  color: #ffffff;
+  font-family: var(--font-sans);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 242, 255, 0.25);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 242, 255, 0.45);
+}
+

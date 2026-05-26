@@ -1,0 +1,10 @@
+{
+  "name": "Remix: Ovozli AI Chat Bot",
+  "description": "Real vaqt rejimida ishlaydigan ovozli muloqot bot (Voice AI Chatbot powered by Gemini)",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
