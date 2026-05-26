@@ -300,7 +300,8 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             audioBase64: base64Audio,
-            history: activeHistory
+            history: activeHistory,
+            voice: selectedVoice
           })
         });
 
@@ -393,7 +394,8 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messageText: userText,
-          history: [...activeHistory, { sender: "user", text: userText }]
+          history: [...activeHistory, { sender: "user", text: userText }],
+          voice: selectedVoice
         })
       });
 
@@ -502,11 +504,50 @@ export default function App() {
     }
 
     if (!base64 && textToSpeak) {
-      // Speak using native browser fallback SpeechSynthesis
       setCurrentlyPlayingMessageId(msgId);
-      speakTextWithFallback(textToSpeak, () => {
-        setCurrentlyPlayingMessageId(null);
-      });
+      
+      // Attempt to generate a beautiful Gemini high-fidelity voice instead of browser synthesis fallback
+      fetch("/api/generate-tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: textToSpeak, voice: selectedVoice })
+      })
+        .then(res => {
+          if (!res.ok) throw new Error("TTS endpoint unreachable");
+          return res.json();
+        })
+        .then(data => {
+          if (data.audioBase64) {
+            // Update historical messages array with generated audio so repeating is instant next time!
+            setMessages(prev =>
+              prev.map(m => (m.id === msgId ? { ...m, audioBase64: data.audioBase64 } : m))
+            );
+
+            const audioUrl = `data:audio/wav;base64,${data.audioBase64}`;
+            const player = new Audio(audioUrl);
+            audioPlaybackRef.current = player;
+            player.onended = () => {
+              setCurrentlyPlayingMessageId(null);
+            };
+            player.onerror = () => {
+              speakTextWithFallback(textToSpeak, () => setCurrentlyPlayingMessageId(null));
+            };
+            player.play().catch(err => {
+              console.warn("Audio Context blocked play trigger:", err);
+              speakTextWithFallback(textToSpeak, () => setCurrentlyPlayingMessageId(null));
+            });
+          } else {
+            speakTextWithFallback(textToSpeak, () => {
+              setCurrentlyPlayingMessageId(null);
+            });
+          }
+        })
+        .catch(err => {
+          console.warn("Could not retrieve AI TTS, falling back to local Speech:", err);
+          speakTextWithFallback(textToSpeak, () => {
+            setCurrentlyPlayingMessageId(null);
+          });
+        });
       return;
     }
 
@@ -571,7 +612,7 @@ export default function App() {
     try {
       // 1. Establish audio context
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx = new AudioCtxClass({ sampleRate: 16000 });
+      const audioCtx = new AudioCtxClass();
       audioContextRef.current = audioCtx;
       nextPlaybackTime.current = audioCtx.currentTime;
 
@@ -585,7 +626,7 @@ export default function App() {
 
       // 3. Connect to ws server
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//${window.location.host}/api/live-ws`;
+      const wsUrl = `${protocol}//${window.location.host}/api/live-ws?voice=${selectedVoice}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -909,6 +950,47 @@ export default function App() {
             <MessageSquare className={`h-4 w-4 ${activeTab === "chat" ? "text-purple-400" : ""}`} />
             <span>{lang === "uz" ? "Muloqot (Chat)" : "Chat Portal"}</span>
           </button>
+        </div>
+
+        {/* Futuristic Voice Selector bar */}
+        <div className="w-full flex flex-col gap-2 p-3 bg-black/60 border border-slate-800/80 rounded-2xl shadow-lg ease-in-out duration-200">
+          <div className="flex justify-between items-center text-[10px] uppercase font-mono tracking-widest px-1 text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+              <span>{lang === "uz" ? "AI Ovoz Sozlamasi" : "AI Voice Profile"}</span>
+            </span>
+            <span className="text-purple-400 font-extrabold font-mono text-[11px] animate-pulse">
+              {selectedVoice.toUpperCase()} ({selectedVoice === "Zephyr" || selectedVoice === "Kore" ? "HQ" : "SD"})
+            </span>
+          </div>
+          
+          <div className="grid grid-cols-5 gap-1.5 mt-1">
+            {[
+              { id: "Zephyr", name: lang === "uz" ? "Zefir" : "Zephyr", desc: lang === "uz" ? "Premium Erkak Ovozi (HQ)" : "Premium Male (HQ)" },
+              { id: "Kore", name: lang === "uz" ? "Kora" : "Kore", desc: lang === "uz" ? "Premium Ayol Ovozi (HQ)" : "Premium Female (HQ)" },
+              { id: "Puck", name: lang === "uz" ? "Pak" : "Puck", desc: lang === "uz" ? "Inglizcha Erkak" : "English Male" },
+              { id: "Charon", name: lang === "uz" ? "Xaron" : "Charon", desc: lang === "uz" ? "Chuqur Erkak" : "Deep Male" },
+              { id: "Fenrir", name: lang === "uz" ? "Fenrir" : "Fenrir", desc: lang === "uz" ? "Aniq Erkak" : "Crisp Male" },
+            ].map((voice) => {
+              const isActive = selectedVoice === voice.id;
+              return (
+                <button
+                  key={voice.id}
+                  type="button"
+                  onClick={() => setSelectedVoice(voice.id)}
+                  className={`py-2 px-1 rounded-xl text-center border transition-all cursor-pointer active:scale-95 flex flex-col items-center gap-0.5 ${
+                    isActive
+                      ? "bg-purple-500/10 border-purple-500/40 text-purple-200 shadow-[0_0_12px_rgba(168,85,247,0.15)] scale-105"
+                      : "bg-black/30 border-white/5 text-slate-400 hover:text-slate-200 hover:border-white/10"
+                  }`}
+                  title={voice.desc}
+                >
+                  <span className="text-[10px] font-bold tracking-tight">{voice.name}</span>
+                  <span className="text-[7px] opacity-70 font-mono pointer-events-none scale-90">{voice.id === "Zephyr" || voice.id === "Kore" ? "HQ" : "SD"}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* LIVE WEBSOCKET CORER PANEL */}
