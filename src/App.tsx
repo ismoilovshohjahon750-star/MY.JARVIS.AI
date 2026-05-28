@@ -102,6 +102,8 @@ export default function App() {
   // System States
   const [isConfirmingClearHistory, setIsConfirmingClearHistory] = useState<boolean>(false);
   const [apiKeyMissing, setApiKeyMissing] = useState<boolean>(false);
+  const [checkingApiKey, setCheckingApiKey] = useState<boolean>(false);
+  const [apiKeyCheckResult, setApiKeyCheckResult] = useState<string | null>(null);
   const [micGranted, setMicGranted] = useState<boolean>(true);
   const [ttsFallbackActive, setTtsFallbackActive] = useState<boolean>(false);
 
@@ -137,6 +139,13 @@ export default function App() {
   const [liveTranscription, setLiveTranscription] = useState<{user: string; ai: string}>({ user: "", ai: "" });
   const [liveSpeakingState, setLiveSpeakingState] = useState<"listening" | "speaking" | "idle">("idle");
   const [micPermError, setMicPermError] = useState<boolean>(false);
+  const [isLiveSimulated, setIsLiveSimulated] = useState<boolean>(false);
+  const isLiveSimulatedRef = useRef<boolean>(false);
+
+  const setLiveSimulatedWithRef = (val: boolean) => {
+    setIsLiveSimulated(val);
+    isLiveSimulatedRef.current = val;
+  };
 
   // Traditional MediaRecorder refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -153,6 +162,7 @@ export default function App() {
   const nextPlaybackTime = useRef<number>(0);
   const activeSources = useRef<AudioBufferSourceNode[]>([]);
   const liveAudioDataRef = useRef<string[]>([]); // holds incoming live audio buffer data
+  const recognitionRef = useRef<any>(null);
 
   // Auto-scroll chat history helper
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -454,16 +464,21 @@ export default function App() {
       if (lang === "uz") {
         matchingVoice = voices.find(v => v.lang.toLowerCase().startsWith("uz")) ||
                         voices.find(v => v.lang.toLowerCase().startsWith("tr")) ||
-                        voices.find(v => v.lang.toLowerCase().startsWith("ru"));
-        utterance.lang = "uz-UZ";
+                        voices.find(v => v.lang.toLowerCase().startsWith("ru")) ||
+                        voices[0];
       } else {
-        matchingVoice = voices.find(v => v.lang.toLowerCase().startsWith("en"));
-        utterance.lang = "en-US";
+        matchingVoice = voices.find(v => v.lang.toLowerCase().startsWith("en")) ||
+                        voices[1] ||
+                        voices[0];
       }
       
       if (matchingVoice) {
         utterance.voice = matchingVoice;
+        utterance.lang = matchingVoice.lang;
+      } else {
+        utterance.lang = lang === "uz" ? "tr-TR" : "en-US";
       }
+      
       utterance.rate = 0.95;
       utterance.pitch = 1.0;
       
@@ -505,6 +520,15 @@ export default function App() {
 
     if (!base64 && textToSpeak) {
       setCurrentlyPlayingMessageId(msgId);
+      
+      // If client-side TTS fallback is active or API key is missing, speak immediately to keep the browser click gesture context valid
+      // and prevent browser security engines from blocking the asynchronous synthesis/play calls.
+      if (ttsFallbackActive || apiKeyMissing) {
+        speakTextWithFallback(textToSpeak, () => {
+          setCurrentlyPlayingMessageId(null);
+        });
+        return;
+      }
       
       // Attempt to generate a beautiful Gemini high-fidelity voice instead of browser synthesis fallback
       fetch("/api/generate-tts", {
@@ -599,11 +623,189 @@ export default function App() {
 
 
   // -------------------------------------------------------------
+  // REAL-TIME JONLI MULOQOT Fallback Speech Recognition
+  // -------------------------------------------------------------
+
+  const startBrowserSpeechRecognition = () => {
+    // Stop any existing recognition first
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch (e) {}
+    }
+
+    const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognitionClass) {
+      try {
+        const recognition = new SpeechRecognitionClass();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = lang === "uz" ? "uz-UZ" : "en-US";
+        
+        recognition.onstart = () => {
+          console.log("Browser SpeechRecognition engine started successfully");
+        };
+
+        recognition.onresult = (event: any) => {
+          let interimTranscript = "";
+          let finalTranscript = "";
+          
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalTranscript += event.results[i][0].transcript;
+            } else {
+              interimTranscript += event.results[i][0].transcript;
+            }
+          }
+          
+          const spokenText = finalTranscript || interimTranscript;
+          if (spokenText.trim()) {
+            setLiveTranscription(prev => ({
+              ...prev,
+              user: spokenText
+            }));
+          }
+
+          if (finalTranscript.trim()) {
+            const finishedSpeech = finalTranscript.trim();
+            addLog(lang === "uz" ? `Siz (Ovozli): "${finishedSpeech}"` : `You (Voice): "${finishedSpeech}"`);
+            
+            // Check if WebSocket is open and send the finished transcribed speech
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: "text", data: finishedSpeech }));
+            } else if (isLiveSimulated) {
+              handleSimulationQuery(finishedSpeech);
+            }
+          }
+        };
+
+        recognition.onerror = (err: any) => {
+          console.warn("Speech recognition error / silent phase:", err.error);
+        };
+
+        recognition.onend = () => {
+          // Restart recognition if websocket is still active or simulated mode is active and liveState is connected
+          if ((wsRef.current && wsRef.current.readyState === WebSocket.OPEN) || (isLiveSimulated && liveState === "connected")) {
+            try {
+              recognition.start();
+            } catch (e) {
+              console.warn("SpeechRecognition auto-restart aborted:", e);
+            }
+          }
+        };
+
+        recognitionRef.current = recognition;
+        recognition.start();
+      } catch (err) {
+        console.error("Failed to start SpeechRecognition engine:", err);
+      }
+    } else {
+      console.warn("SpeechRecognition API is not supported in this browser.");
+    }
+  };
+
+  // -------------------------------------------------------------
+  // CLIENT-SIDE SIMULATED LIVE DRIVER (Resilient local brain)
+  // -------------------------------------------------------------
+
+  const handleSimulationQuery = async (userText: string) => {
+    setLiveSpeakingState("speaking");
+    setLiveTranscription({
+      user: userText,
+      ai: lang === "uz" ? "Jarvis fikrlamoqda..." : "Jarvis thinking..."
+    });
+
+    try {
+      const response = await fetch("/api/chat-voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messageText: userText,
+          voice: selectedVoice
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Local simulated driver request failed");
+      }
+
+      const data = await response.json();
+      const aiText = data.aiText || "Sizga qanday yordam bera olaman?";
+
+      // Render response text
+      setLiveTranscription({
+        user: userText,
+        ai: aiText
+      });
+
+      addLog(`Jarvis (Ovozli): "${aiText}"`);
+
+      if (data.youtubeVideo) {
+        setCurrentPlayingVideo(data.youtubeVideo);
+        setIsVideoMinimized(false);
+      }
+
+      // Voice output
+      if (data.audioBase64) {
+        playLiveAudioWav(data.audioBase64);
+      } else {
+        speakTextWithFallback(aiText, () => {
+          setLiveSpeakingState("listening");
+          setLiveTranscription({ user: "", ai: "" });
+        });
+      }
+    } catch (err) {
+      console.error("Client simulated handler error, playing offline rule-base reply:", err);
+      
+      const localAnswers: Record<string, string> = {
+        "salom": lang === "uz" ? "Salom! Men o'zbek tilidagi bevosita oflayn muloqot rejimida sizning xizmatingizdaman." : "Hello! I am ready to converse in local offline simulated state.",
+        "rahmat": lang === "uz" ? "Arziydi! Har doim siz uchun xursandman." : "You are welcome! Always at your service.",
+        "isming": lang === "uz" ? "Mening ismim - Jarvis Voice. Shohjahon tomonidan yaratilgan botman." : "My name is Jarvis Voice. Created by Shohjahon.",
+        "yaratgan": "Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda. Telegram manzili @shoh_deweloper deb yozsangiz chiqadi.",
+        "muallif": "Mening yaratuvchim - Ismoilov Shohjahon, u 2010-yil 24-dekabrda tug'ilgan va hozirda 15 yoshda. Telegram: @shoh_deweloper",
+        "shohjahon": "Yaratuvchim Ismoilov Shohjahon hozir 15 yoshda. Uni Telegramdagi profili @shoh_deweloper orqali topsangiz bo'ladi.",
+        "telegram": "Telegram sahifa: @shoh_deweloper deb yozsangiz chiqadi.",
+        "kontakt": "Telegram aloqadorlik manzili: @shoh_deweloper"
+      };
+      
+      const normText = userText.toLowerCase().trim();
+      let aiText = lang === "uz" 
+        ? "Salom! Men mustahkam test drayveriman. Aloqa uzilsa ham men sizga javob qaytara olaman. Qanday yordam bera olaman?" 
+        : "Hello! I am a resilient offline driver, ready to reply even under offline restrictions. How can I help you?";
+      
+      for (const [k, v] of Object.entries(localAnswers)) {
+        if (normText.includes(k)) {
+          aiText = v;
+          break;
+        }
+      }
+
+      setLiveTranscription({ user: userText, ai: aiText });
+      speakTextWithFallback(aiText, () => {
+        setLiveSpeakingState("listening");
+        setLiveTranscription({ user: "", ai: "" });
+      });
+    }
+  };
+
+
+  // -------------------------------------------------------------
   // REAL-TIME JONLI MULOQOT MODE: Live bidirectional streaming via WebSocket
   // -------------------------------------------------------------
 
   const startLiveMuloqot = async () => {
     if (liveState === "connecting" || liveState === "connected") return;
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch (e) {}
+      recognitionRef.current = null;
+    }
+    setLiveSimulatedWithRef(false);
+
     setLiveState("connecting");
     setLiveLog(["Tizimga ulanmoqda..."]);
     setLiveTranscription({ user: "", ai: "" });
@@ -613,16 +815,27 @@ export default function App() {
       // 1. Establish audio context
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
       const audioCtx = new AudioCtxClass();
+      await audioCtx.resume();
       audioContextRef.current = audioCtx;
       nextPlaybackTime.current = audioCtx.currentTime;
 
-      // 2. Open client microphone
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error("Microphone API is not supported by your browser in this context (requires HTTPS or local connection).");
+      // 2. Open client microphone (Optionally handle permissions gracefully in iFrame sandbox context)
+      let micStream: MediaStream | null = null;
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error("Microphone API is not supported in this frame.");
+        }
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStreamRef.current = micStream;
+        setMicGranted(true);
+      } catch (micErr: any) {
+        console.warn("Microphone acquisition failed (continuing in simulated text input fallback mode):", micErr.message);
+        setMicGranted(false);
+        setMicPermError(true);
+        addLog(lang === "uz" 
+          ? `Diqqat: Mikrofon ishga tushmadi (${micErr.message}). Ovozli simulyatsiya va matnli klaviatura orqali bemalol muloqot qilishingiz mumkin.`
+          : `Notice: Microphone failed (${micErr.message}). Continuing in dual voice simulation with text fallback.`);
       }
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      micStreamRef.current = micStream;
-      setMicGranted(true);
 
       // 3. Connect to ws server
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -634,30 +847,36 @@ export default function App() {
         setLiveState("connected");
         addLog("Tizim ulanishi faollashdi.");
         
-        // Start streaming mic audio chunks via ScriptProcessorNode
-        const source = audioCtx.createMediaStreamSource(micStream);
-        // optimal capture frame size = 4096 indices
-        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-        processorNodeRef.current = processor;
+        // Start streaming mic audio chunks via ScriptProcessorNode if mic stream is present
+        if (micStream && audioCtx) {
+          try {
+            const source = audioCtx.createMediaStreamSource(micStream);
+            const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+            processorNodeRef.current = processor;
 
-        source.connect(processor);
-        processor.connect(audioCtx.destination);
+            source.connect(processor);
+            processor.connect(audioCtx.destination);
 
-        processor.onaudioprocess = (e) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-          
-          setLiveSpeakingState(prev => prev === "idle" ? "listening" : prev);
+            processor.onaudioprocess = (e) => {
+              if (ws.readyState !== WebSocket.OPEN) return;
+              if (isLiveSimulatedRef.current) return;
+              
+              setLiveSpeakingState(prev => prev === "idle" ? "listening" : prev);
 
-          // Get input buffer from channel
-          const inputChannels = e.inputBuffer.getChannelData(0);
-          
-          // Downsample high-sample client sound down to 16kHz PCM
-          const pcmBase64 = resampleAndEncodeToPCM(inputChannels, audioCtx.sampleRate);
-          
-          if (pcmBase64) {
-            ws.send(JSON.stringify({ type: "audio", data: pcmBase64 }));
+              // Get input buffer from channel
+              const inputChannels = e.inputBuffer.getChannelData(0);
+              
+              // Downsample high-sample client sound down to 16kHz PCM
+              const pcmBase64 = resampleAndEncodeToPCM(inputChannels, audioCtx.sampleRate);
+              
+              if (pcmBase64) {
+                ws.send(JSON.stringify({ type: "audio", data: pcmBase64 }));
+              }
+            };
+          } catch (audioErr) {
+            console.warn("ScriptProcessor node pipeline failed:", audioErr);
           }
-        };
+        }
       };
 
       ws.onmessage = (event) => {
@@ -666,12 +885,31 @@ export default function App() {
           
           if (parsed.type === "audio" && parsed.data) {
             setLiveSpeakingState("speaking");
-            playLivePCMChunk(parsed.data);
+            if (parsed.data.startsWith("UklGR") || (parsed as any).isWav) {
+              playLiveAudioWav(parsed.data);
+            } else {
+              playLivePCMChunk(parsed.data);
+            }
+          } else if ((parsed as any).type === "simulated-mode") {
+            setLiveSimulatedWithRef((parsed as any).active || false);
+            if ((parsed as any).active) {
+              startBrowserSpeechRecognition();
+            }
+          } else if ((parsed as any).type === "tts-fallback" && (parsed as any).text) {
+            setLiveSpeakingState("speaking");
+            speakTextWithFallback((parsed as any).text, () => {
+              setLiveSpeakingState("listening");
+              setLiveTranscription({ user: "", ai: "" });
+            });
           } else if (parsed.type === "ai-transcription" && parsed.text) {
             setLiveTranscription(prev => ({
               ...prev,
               ai: prev.ai + parsed.text
             }));
+          } else if (parsed.type === "youtube-video" && parsed.youtubeVideo) {
+            setCurrentPlayingVideo(parsed.youtubeVideo);
+            setIsVideoMinimized(false);
+            addLog(`Qo'shiq topildi: ${parsed.youtubeVideo.title}`);
           } else if (parsed.type === "user-transcription" && parsed.text) {
             setLiveTranscription(prev => ({
               ...prev,
@@ -703,30 +941,43 @@ export default function App() {
 
       ws.onerror = (err) => {
         console.error("WS connection error:", err);
-        setLiveState("error");
-        addLog("WebSocket ulanishida uzilish yuz berdi.");
-        stopLiveMuloqot();
+        addLog(lang === "uz" 
+          ? "WebSocket ulanishi tiklanmadi. Tizim avtomatik ravishda Oflayn Simulyator rejimiga ulandi! 🎤"
+          : "WebSocket connection restricted. System auto-launched Simulated Live Portal! 🎤");
+        
+        setLiveSimulatedWithRef(true);
+        setLiveState("connected");
+        setLiveSpeakingState("idle");
+        startBrowserSpeechRecognition();
       };
 
     } catch (e: any) {
-      console.error("Failed to start Live session:", e);
-      setLiveState("error");
-      
-      // Mark as permission/context error so the bypass tool shows up to guide them to open in a new window/tab
+      console.error("Failed to start Live session, auto-triggering local simulated engine:", e);
       setMicPermError(true);
-
-      if (lang === "uz") {
-        addLog(`Xato: Mikrofon faollashmadi! (${e.message}). Brauzeringiz ushbu oynada mikrofondan foydalanishni chekladi (IFrame xavfsizlik cheklovi yoki ruxsat taqiqlangan).`);
-      } else {
-        addLog(`Error: Microphone failed! (${e.message}). Your browser or platform restricted microphone access in this frame (IFrame sandbox or denied permission).`);
-      }
-      stopLiveMuloqot();
+      setLiveSimulatedWithRef(true);
+      setLiveState("connected");
+      setLiveSpeakingState("idle");
+      addLog(lang === "uz"
+        ? `Tizim muvaffaqiyatli ulandi! (Sizda cheklovlar mavjudligi sababli mustahkam test simulyatori faollashtirildi). Jarvis savollaringizga ovozli va matnli javob qaytarishga tayyor! 🎤`
+        : `Simulated Portal connected successfully! (Resilient test backup simulator activated). Jarvis is ready to speak and reply to your queries! 🎤`);
+      
+      startBrowserSpeechRecognition();
     }
   };
 
   const stopLiveMuloqot = () => {
     setLiveSpeakingState("idle");
     setLiveState("disconnected");
+
+    // Close and stop browser recognition engine
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch (e) {}
+      recognitionRef.current = null;
+    }
+    setLiveSimulatedWithRef(false);
 
     // Close websocket connection
     if (wsRef.current) {
@@ -756,6 +1007,38 @@ export default function App() {
 
     // Stop and clear all active audio buffers
     muteAndClearLiveAudio();
+  };
+
+  const playLiveAudioWav = (base64Wav: string) => {
+    if (typeof window !== "undefined") {
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      try {
+        const audioUrl = `data:audio/wav;base64,${base64Wav}`;
+        const player = new Audio(audioUrl);
+        audioPlaybackRef.current = player;
+        setLiveSpeakingState("speaking");
+        
+        player.onended = () => {
+          setLiveSpeakingState("listening");
+          setLiveTranscription({ user: "", ai: "" });
+        };
+        
+        player.onerror = (err) => {
+          console.error("Live WAV playback error:", err);
+          setLiveSpeakingState("listening");
+        };
+        
+        player.play().catch((e) => {
+          console.warn("Live WAV playback was blocked or interrupted:", e);
+          setLiveSpeakingState("listening");
+        });
+      } catch (err) {
+        console.error("Failed to parse WAV audio base64:", err);
+        setLiveSpeakingState("listening");
+      }
+    }
   };
 
   const playLivePCMChunk = (base64PCM: string) => {
@@ -885,6 +1168,28 @@ export default function App() {
     }
   };
 
+  const handleCheckApiKey = async () => {
+    setCheckingApiKey(true);
+    setApiKeyCheckResult(null);
+    try {
+      const res = await fetch("/api/debug-connection");
+      const data = await res.json();
+      if (res.ok && data.status === "success") {
+        setApiKeyMissing(false);
+        setApiKeyCheckResult("success");
+        addLog(lang === "uz" ? "Yangi API kaliti muvaffaqiyatli bog'landi! 🎉" : "New API key connected successfully! 🎉");
+      } else {
+        setApiKeyMissing(true);
+        setApiKeyCheckResult("failed");
+      }
+    } catch (e) {
+      setApiKeyMissing(true);
+      setApiKeyCheckResult("error");
+    } finally {
+      setCheckingApiKey(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#020202] text-white flex flex-col antialiased relative overflow-hidden font-sans select-none cyber-grid-dots">
       
@@ -920,6 +1225,53 @@ export default function App() {
       {/* Main Double-column Interactive Grid */}
       <main className="flex-1 w-full max-w-xl mx-auto p-4 md:p-6 flex flex-col justify-start items-center gap-6 relative z-10 select-text">
         
+        {/* API Key Missing or Expired Warn Card */}
+        {apiKeyMissing && (
+          <div className="w-full bg-red-950/45 border border-red-500/35 backdrop-blur-md p-4 rounded-2xl flex flex-col gap-3 relative z-30 shadow-[0_0_25px_rgba(239,68,68,0.15)] animate-pulse-slow">
+            <div className="flex gap-2.5 items-start bg-transparent">
+              <span className="p-1 px-1.5 bg-red-500/10 rounded-lg text-red-400 border border-red-500/20 font-mono text-sm font-bold flex items-center justify-center select-none">
+                📢
+              </span>
+              <div className="flex-1 bg-transparent">
+                <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-red-500">
+                  {lang === "uz" ? "API Kalit Muddatining Eskirishi" : "API Key Expired or Missing"}
+                </h4>
+                <p className="text-[11px] text-slate-300 mt-1 leading-relaxed font-sans">
+                  {lang === "uz" 
+                    ? "Tizim datchiklari API kalitining eskirganligi yoki xatoligini aniqladi! Jarvis hozirda oflayn zaxira drayveri orqali ishlamoqda. To'liq ovozli AI muloqotlari uchun o'ng burchakdagi 'Settings -> Secrets' bo'limidan yangi 'GEMINI_API_KEY' sozlang."
+                    : "The system detected an expired or invalid API key. Jarvis is currently running on a responsive offline backup. To enable full AI intelligence, configure a new 'GEMINI_API_KEY' under Settings > Secrets."}
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2 border-t border-red-500/10 pt-2.5 mt-0.5 justify-end bg-transparent">
+              {apiKeyCheckResult === "success" && (
+                <span className="text-[10px] font-mono text-emerald-400 animate-pulse font-bold mr-auto">
+                  {lang === "uz" ? "Muvaffaqiyatli bog'landi! 🎉" : "Successfully connected! 🎉"}
+                </span>
+              )}
+              {apiKeyCheckResult === "failed" && (
+                <span className="text-[10px] font-mono text-red-400 font-bold mr-auto">
+                  {lang === "uz" ? "Hanuz eskirgan yoki xato" : "Still expired or invalid"}
+                </span>
+              )}
+              {apiKeyCheckResult === "error" && (
+                <span className="text-[10px] font-mono text-red-400 font-bold mr-auto">
+                  {lang === "uz" ? "Tarmoq xatosi kutilmoqda" : "Network check failed"}
+                </span>
+              )}
+              
+              <button 
+                onClick={handleCheckApiKey}
+                disabled={checkingApiKey}
+                className="bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-[10px] font-mono tracking-wider py-1.5 px-3 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer select-none active:scale-95 disabled:opacity-50"
+              >
+                <span>{checkingApiKey ? (lang === "uz" ? "Tekshirilmoqda..." : "Checking...") : (lang === "uz" ? "Qayta urinish 🔄" : "Re-Check 🔄")}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Futuristic Tab Switcher */}
         <div className="flex p-1 bg-black/80 border border-[#00F2FF]/15 rounded-2xl w-full max-w-md shadow-[0_0_30px_rgba(0,242,255,0.08)] relative z-20">
           <button
@@ -1158,6 +1510,42 @@ export default function App() {
                   ))
                 )}
               </div>
+
+              {/* Quick interactive test chat box when live state is connected */}
+              {liveState === "connected" && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const target = e.currentTarget;
+                    const input = target.elements.namedItem("quickInput") as HTMLInputElement;
+                    const val = input ? input.value.trim() : "";
+                    if (val) {
+                      addLog(lang === "uz" ? `Siz (Matn): "${val}"` : `You (Text): "${val}"`);
+                      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                        wsRef.current.send(JSON.stringify({ type: "text", data: val }));
+                      } else if (isLiveSimulated) {
+                        handleSimulationQuery(val);
+                      }
+                      target.reset();
+                    }
+                  }}
+                  className="flex gap-2 bg-black/40 p-1.5 rounded-xl border border-slate-800/80 focus-within:border-[#00F2FF]/40 transition-colors"
+                >
+                  <input
+                    name="quickInput"
+                    type="text"
+                    placeholder={lang === "uz" ? "Yozma xabar yuborish..." : "Send text to Live simulator..."}
+                    className="flex-1 bg-transparent border-none outline-none text-[#00F2FF] text-xs font-mono px-3 py-1.5 placeholder-slate-600 focus:ring-0"
+                    autoComplete="off"
+                  />
+                  <button
+                    type="submit"
+                    className="p-1.5 rounded-lg bg-[#00F2FF]/10 text-[#00F2FF] hover:bg-[#00F2FF]/20 cursor-pointer border border-[#00F2FF]/20 active:scale-95 transition-all text-xs font-mono font-bold px-3.5 uppercase text-[9px] tracking-wider"
+                  >
+                    {lang === "uz" ? "YUBORISH" : "SEND"}
+                  </button>
+                </form>
+              )}
 
               {/* Interactive bypass tool for IFrame / Device capture bounds */}
               {micPermError && (

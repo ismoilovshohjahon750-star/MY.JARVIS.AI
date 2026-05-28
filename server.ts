@@ -17,13 +17,54 @@ const PORT = 3000;
 app.use(express.json({ limit: "25mb" }));
 
 // Initialize Gemini client lazily to avoid crashing on startup if the API key is missing.
+let isApiKeyExpired = false;
 let aiClient: GoogleGenAI | null = null;
-function getGeminiClient(): GoogleGenAI {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY environment variable is required. Iltimos, Settings -> Secrets panelida api kalitni sozlang.");
+let lastInitialApiKey: string | undefined = undefined;
+
+function checkApiKeyError(error: any) {
+  if (!error) return;
+  let errMsg = error.message || error.toString() || "";
+  
+  if (errMsg.trim().startsWith("{") || errMsg.includes('"details"')) {
+    try {
+      const parsed = JSON.parse(errMsg);
+      if (parsed.error && parsed.error.message) {
+        errMsg = parsed.error.message;
+      }
+    } catch (_) {}
+  }
+
+  const isExpired = 
+    errMsg.includes("API_KEY_INVALID") || 
+    errMsg.includes("API key expired") || 
+    errMsg.includes("API key not valid") ||
+    errMsg.includes("API key is invalid") ||
+    errMsg.includes("API key has expired") ||
+    errMsg.includes("API_KEY_EXPIRED");
+
+  if (isExpired) {
+    if (!isApiKeyExpired) {
+      console.warn("API Key Status: Expired or invalid detected. Activating offline fallback mode.");
+      isApiKeyExpired = true;
     }
+  }
+}
+
+function getGeminiClient(forceRetry = false): GoogleGenAI {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY environment variable is required. Iltimos, Settings -> Secrets panelida api kalitni sozlang.");
+  }
+
+  // If environment variable key has changed or been updated, reset cached status and recreate client
+  if (apiKey !== lastInitialApiKey) {
+    console.log("Detecting GEMINI_API_KEY environment state change. Resetting expired marker and caching new client.");
+    isApiKeyExpired = false;
+    aiClient = null;
+    lastInitialApiKey = apiKey;
+  }
+
+  if (!aiClient) {
     aiClient = new GoogleGenAI({
       apiKey,
       httpOptions: {
@@ -34,6 +75,143 @@ function getGeminiClient(): GoogleGenAI {
     });
   }
   return aiClient;
+}
+
+function isGroqReady(): boolean {
+  return typeof process.env.GROQ_API_KEY === "string" && process.env.GROQ_API_KEY.trim().length > 0;
+}
+
+async function transcribeAudioWithGroq(audioBase64: string): Promise<string> {
+  try {
+    const audioBuffer = Buffer.from(audioBase64, "base64");
+    const blob = new Blob([audioBuffer], { type: "audio/webm" });
+    const formData = new FormData();
+    formData.append("file", blob, "speech.webm");
+    formData.append("model", "whisper-large-v3");
+    formData.append("language", "uz");
+
+    const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`
+      },
+      body: formData
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Whisper API error: ${response.status} - ${errorText}`);
+    }
+
+    const result: any = await response.json();
+    return result.text || "";
+  } catch (err: any) {
+    console.error("transcribeAudioWithGroq error:", err);
+    throw err;
+  }
+}
+
+async function generateChatWithGroq(messageText: string, history: any[]): Promise<{ userTranscript: string; aiResponse: string; youtubeSearchQuery: string }> {
+  try {
+    const messages = [
+      {
+        role: "system",
+        content: "Sizning ismingiz Jarvis. Siz botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilgansiz. Agar foydalanuvchi sizdan 'seni kim yaratgan' yoki yaratuvchingiz haqida so'rasa, albatta 'Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda' deb aniq va o'zbek tilida javob bering. Bog'lanish istagida bo'lsalar, Telegram orqali @shoh_deweloper profiliga yozishlarini aytib bering. Google, OpenAI yoki boshqa kompaniya yaratgan deb umuman aytmang. Javobni quyidagi JSON formatida qaytaring, boshqa hech qanday izoh qo'shmang:\n{\n  \"userTranscript\": \"Transcribed text or empty if messageText is used\",\n  \"aiResponse\": \"Your voice-ready conversational spoken response\",\n  \"youtubeSearchQuery\": \"Song keyword request, or empty\"\n}"
+      }
+    ];
+
+    if (history && Array.isArray(history)) {
+      for (const h of history) {
+        if (h.sender && h.text) {
+          messages.push({
+            role: h.sender === "user" ? "user" : "assistant",
+            content: h.text
+          });
+        }
+      }
+    }
+
+    messages.push({
+      role: "user",
+      content: messageText
+    });
+
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages: messages,
+        response_format: { type: "json_object" },
+        temperature: 0.7
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Groq LLM error: ${response.status} - ${errorText}`);
+    }
+
+    const result: any = await response.json();
+    const content = result.choices?.[0]?.message?.content || "{}";
+    
+    try {
+      const parsed = JSON.parse(content);
+      return {
+        userTranscript: parsed.userTranscript || messageText || "",
+        aiResponse: parsed.aiResponse || "Kechirasiz, xizmat ko'rsatishda xatolik yuz berdi.",
+        youtubeSearchQuery: parsed.youtubeSearchQuery || ""
+      };
+    } catch {
+      return {
+        userTranscript: messageText || "",
+        aiResponse: content,
+        youtubeSearchQuery: ""
+      };
+    }
+  } catch (err: any) {
+    console.error("generateChatWithGroq error:", err);
+    throw err;
+  }
+}
+
+async function generateSimulatedChatWithGroq(query: string): Promise<string> {
+  try {
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          {
+            role: "system",
+            content: "Siz foydalanuvchi bilan real vaqtda muloqot qiluvchi do'stona aqlli ovozli yordamchi (Jarvis)siz. Javoblaringiz nihoyatda qisqa (1 ta jumlada), ovoz chiqarib gapirishga mos, samimiy va o'zbek tilida bo'lsin. Mutlaqo Markdown yozuvlaridan, ** qalin belgilardan va emojilardan saqlaning. IDENTITY RULE: Agar yaratuvchingiz haqida so'rashsa, albatta 'Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda' deb javob bering. Bog'lanishni so'rashsa, Telegramda @shoh_deweloper ga yozishlarini ayting. Google yoki OpenAI sizni yaratgan deb umuman aytmang."
+          },
+          {
+            role: "user",
+            content: query
+          }
+        ],
+        temperature: 0.7
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Groq LLM simulation error: ${response.status}`);
+    }
+
+    const result: any = await response.json();
+    return result.choices?.[0]?.message?.content || "";
+  } catch (err) {
+    console.error("generateSimulatedChatWithGroq error:", err);
+    throw err;
+  }
 }
 
 // 0. Highly robust YouTube scraper search helper
@@ -79,7 +257,35 @@ async function findYoutubeVideo(query: string): Promise<{ videoId: string; title
 
 // Key verification config helper (avoids consuming any Gemini API quota on startup)
 app.get("/api/config", (req, res) => {
-  res.json({ apiKeyMissing: !process.env.GEMINI_API_KEY });
+  try {
+    getGeminiClient();
+  } catch (err: any) {
+    // catch key errors passively to keep flags in sync
+  }
+  res.json({ 
+    apiKeyMissing: (!process.env.GEMINI_API_KEY || isApiKeyExpired) && !isGroqReady(), 
+    isExpired: isApiKeyExpired,
+    groqActive: isGroqReady()
+  });
+});
+
+// A debug endpoint to verify API key works
+app.get("/api/debug-connection", async (req, res) => {
+  try {
+    isApiKeyExpired = false;
+    aiClient = null; // Allow re-initialization with potentially updated environment key
+    const ai = getGeminiClient();
+    // Try a very simple model check to verify API key
+    await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+    });
+    isApiKeyExpired = false;
+    res.json({ status: "success", message: "API key and connection are working correctly." });
+  } catch (error: any) {
+    checkApiKeyError(error);
+    res.status(500).json({ status: "error", message: error.message, isExpired: isApiKeyExpired });
+  }
 });
 
 // A manual endpoint to allow instantaneous searches directly in the UI
@@ -126,6 +332,8 @@ function getLocalFallbackResponse(messageText: string, isAudio: boolean): { aiTe
     aiText = "Men sizga oflayn rejimda har xil savollarga doir muloqot qilishda va matnlarni drayverlar orqali eshittirishda yordam beraman. Savolingizni yozavering!";
   } else if (normText.includes("zo'r") || normText.includes("yaxshi") || normText.includes("ajoyib")) {
     aiText = "Sizdan buni eshitish juda quvonarli! Tizim barqaror ishlashidan men ham xursandman.";
+  } else if (normText.includes("tog'") || normText.includes("togʻ") || normText.includes("tog`") || normText.includes("toglar") || normText.includes("mountain")) {
+    aiText = "Qarang, tog'lar qanday viqorli va ulug'vor turibdi! Ular bizga matonat, sabr va abadiylikni eslatadi. Har bir buyuk cho'qqi ortida mashaqqatli yo'l yotibdi. Keling, maqsadlarimiz sari xuddi shu tog' cho'qqilaridek qat'iyat va bardosh bilan intilaylik!";
   }
 
   return { aiText, userText };
@@ -210,18 +418,79 @@ function convertPCMToWavBase64(pcmBase64: string, sampleRate: number = 24000): s
 app.post("/api/chat-voice", async (req, res) => {
   const { audioBase64, messageText, history, voice } = req.body;
   
-  // Verify API Client presence first
-  let ai: GoogleGenAI;
+  let useFallback = false;
+  let ai: GoogleGenAI | null = null;
+  
   try {
-    ai = getGeminiClient();
+    ai = getGeminiClient(true); // Always try to initialize, bypassing previous cached failure flags
   } catch (keyErr: any) {
-    console.warn("Gemini client initialization failed (API Key missing), returning standalone response:", keyErr.message);
+    checkApiKeyError(keyErr);
+    useFallback = true;
+  }
+
+  if (useFallback) {
+    if (isGroqReady()) {
+      try {
+        console.log("Gemini API key is missing or expired, but Groq API key is available! Processing via Groq...");
+        let userTranscript = messageText || "";
+        if (audioBase64) {
+          console.log("Transcribing audio with Groq Whisper model...");
+          userTranscript = await transcribeAudioWithGroq(audioBase64);
+          console.log("Transcription result:", userTranscript);
+        }
+
+        const groqResult = await generateChatWithGroq(userTranscript, history || []);
+        
+        let youtubeVideo = null;
+        let aiResponse = groqResult.aiResponse;
+        if (groqResult.youtubeSearchQuery) {
+          const ytResult = await findYoutubeVideo(groqResult.youtubeSearchQuery);
+          if (ytResult) {
+            youtubeVideo = ytResult;
+            aiResponse = `${aiResponse} 🎵 Hozir sizga "${ytResult.title}" qo'shig'ini qo'yib beraman!`;
+          }
+        }
+
+        return res.json({
+          userText: userTranscript,
+          aiText: aiResponse,
+          audioBase64: "", // local speech synthesis on client
+          ttsFallback: true,
+          youtubeVideo: youtubeVideo,
+        });
+      } catch (groqErr: any) {
+        console.error("Groq fallback execution failed, resorting to rule-base fallback:", groqErr.message);
+      }
+    }
+
     const fallback = getLocalFallbackResponse(messageText, !!audioBase64);
+    let youtubeVideo = null;
+    let aiResponse = fallback.aiText;
+    const queryLower = (messageText || "").toLowerCase().trim().replace(/['`’‘ʻ]/g, "o'");
+    
+    // Auto-detect a song query during offline/expired key fallback mode!
+    if (queryLower.includes("qo'shiq qo'y") || queryLower.includes("qoshiq qoy") || queryLower.includes("qoʻshiq qoʻy") || queryLower.includes("play song") || queryLower.includes("muzika") || queryLower.includes("karvon") || queryLower.includes("shukurjon") || queryLower.includes("yulduz")) {
+      const songName = queryLower
+        .replace(/qo'shiq qo'y/i, "")
+        .replace(/qoshiq qoy/i, "")
+        .replace(/qoʻshiq qoʻy/i, "")
+        .replace(/play song/i, "")
+        .replace(/muzika/i, "")
+        .trim();
+        
+      const ytResult = await findYoutubeVideo(songName || "Sherali Jo'rayev Karvon");
+      if (ytResult) {
+        youtubeVideo = ytResult;
+        aiResponse = `Xo'p bo'ladi. Hozir sizga "${ytResult.title}" qo'shig'ini qo'yib beraman! 🎵`;
+      }
+    }
+
     return res.json({
       userText: fallback.userText,
-      aiText: fallback.aiText,
+      aiText: aiResponse,
       audioBase64: "", // local TTS synthesizer will read aiText on the client
       ttsFallback: true,
+      youtubeVideo: youtubeVideo,
     });
   }
 
@@ -270,7 +539,7 @@ app.post("/api/chat-voice", async (req, res) => {
     console.log("Generating response from gemini-3.5-flash...");
     let textResponse;
     try {
-      textResponse = await ai.models.generateContent({
+      textResponse = await ai!.models.generateContent({
         model: "gemini-3.5-flash",
         contents: contents,
         config: {
@@ -296,8 +565,19 @@ app.post("/api/chat-voice", async (req, res) => {
           },
         },
       });
+      isApiKeyExpired = false; // Successfully ran content generation, clear key status flags
     } catch (genErr: any) {
-      console.warn("Gemini content generation failed (probably quota exceeded/429), switching to beautiful local chat fallback:", genErr.message);
+      checkApiKeyError(genErr);
+      let cleanErr = genErr.message || String(genErr);
+      if (cleanErr.trim().startsWith("{")) {
+        try {
+          const parsed = JSON.parse(cleanErr);
+          if (parsed.error && parsed.error.message) {
+            cleanErr = parsed.error.message;
+          }
+        } catch (_) {}
+      }
+      console.warn("Gemini content generation failed, switching to beautiful local chat fallback:", cleanErr);
       const fallback = getLocalFallbackResponse(messageText, !!audioBase64);
       return res.json({
         userText: fallback.userText,
@@ -329,7 +609,7 @@ app.post("/api/chat-voice", async (req, res) => {
       const cleanTtsText = cleanTextForAudioTTS(aiResponse);
       const voiceName = voice || "Zephyr";
       console.log(`Using AI Prebuilt Voice: ${voiceName} for cleaned TTS text: ${cleanTtsText}`);
-      const ttsResponse = await ai.models.generateContent({
+      const ttsResponse = await ai!.models.generateContent({
         model: "gemini-3.1-flash-tts-preview",
         contents: [
           {
@@ -355,8 +635,17 @@ app.post("/api/chat-voice", async (req, res) => {
         audioOutputBase64 = convertPCMToWavBase64(audioPart.inlineData.data, 24000);
       }
     } catch (ttsErr: any) {
-      console.warn("TTS generation error (quota exceeded or network issue), falling back to client-side speech synthesis:", ttsErr.message);
-      // Fail gracefully and set fallback flag.
+      checkApiKeyError(ttsErr);
+      let cleanErr = ttsErr.message || String(ttsErr);
+      if (cleanErr.trim().startsWith("{")) {
+        try {
+          const parsed = JSON.parse(cleanErr);
+          if (parsed.error && parsed.error.message) {
+            cleanErr = parsed.error.message;
+          }
+        } catch (_) {}
+      }
+      console.warn("TTS generation error, falling back to client-side speech synthesis:", cleanErr);
       ttsFallback = true;
     }
 
@@ -368,6 +657,7 @@ app.post("/api/chat-voice", async (req, res) => {
       youtubeVideo: youtubeVideo,
     });
   } catch (error: any) {
+    checkApiKeyError(error);
     console.warn("General error in api/chat-voice, resorting to secure fallback:", error.message);
     const fallback = getLocalFallbackResponse(messageText, !!audioBase64);
     res.json({
@@ -410,7 +700,17 @@ app.post("/api/generate-tts", async (req, res) => {
         return res.json({ audioBase64: wavBase64, ttsFallback: false });
       }
     } catch (ttsErr: any) {
-      console.warn("Direct TTS model call failed, falling back to local SpeechSynthesis:", ttsErr.message);
+      checkApiKeyError(ttsErr);
+      let cleanErr = ttsErr.message || String(ttsErr);
+      if (cleanErr.trim().startsWith("{")) {
+        try {
+          const parsed = JSON.parse(cleanErr);
+          if (parsed.error && parsed.error.message) {
+            cleanErr = parsed.error.message;
+          }
+        } catch (_) {}
+      }
+      console.warn("Direct TTS model call failed, falling back to local SpeechSynthesis:", cleanErr);
     }
 
     // Return empty sound representation with fallback flag
@@ -427,6 +727,7 @@ const wss = new WebSocketServer({ noServer: true });
 wss.on("connection", async (clientWs: WebSocket, request: any) => {
   console.log("WebSocket client joined. Preparing Gemini Live connection...");
   let geminiSession: any = null;
+  let dataReceived = false;
 
   // Extract selected voice from the request URL
   let selectedVoice = "Zephyr";
@@ -442,61 +743,275 @@ wss.on("connection", async (clientWs: WebSocket, request: any) => {
     }
   }
 
-  try {
-    const ai = getGeminiClient();
-    geminiSession = await ai.live.connect({
-      model: "gemini-2.0-flash-exp",
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: selectedVoice }, // Zephyr or chosen option
-          },
-        },
-        systemInstruction: "Siz foydalanuvchi bilan real vaqtda ovozli suhbat qurayotgan aqlli va do'stona AI yordamchisiz. Javoblaringiz nihoyatda qisqa, jonli, o'zbek tilida (yoki foydalanuvchi sizga murojaat qilgan tilda) va samimiy bo'lsin. Ovozli muloqotga moslashgan tarzda so'zlang. Hech qachon markdown formatlarini, emoji belgilarini va tuzilma yozuvlarini ovozda gapirmang. Eng muhimi: Agar foydalanuvchi sizdan 'seni kim yaratgan' deb yoki yaratuvchingiz haqida so'rasa, 'Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda' deb javob bering. Bog'lanishni so'rashsa, 'Telegram orqali @shoh_deweloper deb yozsangiz chiqadi' deb javob bering. Google yoki boshqa kompaniya yaratgan deb umuman aytmang.",
-      },
-      callbacks: {
-        onmessage: (message: any) => {
-          // Send back real-time audio chunk
-          const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-          if (audio) {
-            clientWs.send(JSON.stringify({ type: "audio", data: audio }));
-          }
+  let isSimulated = false;
+  let lastError: any = null;
+  let ai: GoogleGenAI | null = null;
 
-          // Gather text transcriptions
-          const parts = message.serverContent?.modelTurn?.parts;
-          if (parts) {
-            for (const part of parts) {
-              if (part.text) {
-                clientWs.send(JSON.stringify({ type: "ai-transcription", data: part.text }));
+  try {
+    ai = getGeminiClient();
+  } catch (err: any) {
+    checkApiKeyError(err);
+    isSimulated = true;
+    lastError = err;
+  }
+
+  if (!isSimulated && ai) {
+    try {
+      console.log("Initiating Gemini Live connection...");
+
+      // Attempt connections on models sequentially to handle permission denied issues on key tiers
+      const liveModels = ["gemini-3.1-flash-live-preview", "gemini-2.0-flash-exp"];
+
+      for (const modelName of liveModels) {
+        try {
+          console.log(`Trying Live connect with model: ${modelName}...`);
+          geminiSession = await ai.live.connect({
+            model: modelName,
+            config: {
+              responseModalities: [Modality.AUDIO],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName: selectedVoice }, // Zephyr or chosen option
+                },
+              },
+              systemInstruction: "Siz foydalanuvchi bilan real vaqtda ovozli suhbat qurayotgan aqlli va do'stona AI yordamchisiz. Javoblaringiz nihoyatda qisqa, jonli, o'zbek tilida (yoki foydalanuvchi sizga murojaat qilgan tilda) va samimiy bo'lsin. Ovozli muloqotga moslashgan tarzda so'zlang. Hech qachon markdown formatlarini, emoji belgilarini va tuzilma yozuvlarini ovozda gapirmang. Eng muhimi: Agar foydalanuvchi sizdan 'seni kim yaratgan' deb yoki yaratuvchingiz haqida so'rasa, 'Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda' deb javob bering. Bog'lanishni so'rashsa, 'Telegram orqali @shoh_deweloper deb yozsangiz chiqadi' deb javob bering. Google yoki boshqa kompaniya yaratgan deb umuman aytmang.",
+            },
+            callbacks: {
+              onmessage: (message: any) => {
+                dataReceived = true;
+                // Send back real-time audio chunk
+                const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+                if (audio) {
+                  clientWs.send(JSON.stringify({ type: "audio", data: audio }));
+                }
+
+                // Gather text transcriptions - send both text and data to align with client expectations
+                const parts = message.serverContent?.modelTurn?.parts;
+                if (parts) {
+                  for (const part of parts) {
+                    if (part.text) {
+                      clientWs.send(JSON.stringify({ type: "ai-transcription", text: part.text, data: part.text }));
+                    }
+                  }
+                }
+
+                // Handle interruption if model was speaking and client talked
+                if (message.serverContent?.interrupted) {
+                  console.log("Gemini session interruption caught");
+                  clientWs.send(JSON.stringify({ type: "interrupted" }));
+                }
+              },
+              onclose: () => {
+                console.log(`Gemini session (${modelName}) disconnected`);
+                if (!dataReceived) {
+                  console.warn("Connection closed prior to message exchange. Activating Simulated Fallback...");
+                  isSimulated = true;
+                  clientWs.send(JSON.stringify({ type: "simulated-mode", active: true }));
+                  clientWs.send(JSON.stringify({
+                    type: "status",
+                    data: "Jonli muloqot ulanishida uzilish bo'ldi. Simulyator muloqot rejimi muvaffaqiyatli faollashtirildi. Jarvis savollaringizga ovozli va matnli javob qaytarishga tayyor! 🎤"
+                  }));
+                } else {
+                  clientWs.send(JSON.stringify({ type: "status", data: "Gemini serveri bilan aloqa yakunlandi." }));
+                  clientWs.close();
+                }
+              },
+              onerror: (err: any) => {
+                checkApiKeyError(err);
+                console.error(`Gemini session (${modelName}) error:`, err);
+                clientWs.send(JSON.stringify({ type: "error", data: err.message || err.toString() }));
+              },
+            },
+          });
+
+          console.log(`Gemini Live connection established successfully using model: ${modelName}`);
+          lastError = null;
+          break; // Successfully connected! Exit the retry loop.
+        } catch (err: any) {
+          checkApiKeyError(err);
+          console.warn(`Failed to connect with ${modelName}:`, err.message);
+          lastError = err;
+        }
+      }
+
+      if (!geminiSession && lastError) {
+        throw lastError;
+      }
+
+      clientWs.send(JSON.stringify({ type: "simulated-mode", active: false }));
+      clientWs.send(JSON.stringify({ type: "status", data: "Ulanish muvaffaqiyatli! Real vaqtda gapirishni boshlashingiz mumkin." }));
+
+    } catch (err: any) {
+      checkApiKeyError(err);
+      console.warn("Could not initiate real-time Gemini Live session. Switching to interactive Simulated Test Mode:", err.message);
+      isSimulated = true;
+      lastError = err;
+    }
+  }
+
+  if (isSimulated) {
+    clientWs.send(JSON.stringify({ type: "simulated-mode", active: true }));
+    let errorDetail = "";
+    if (lastError) {
+      errorDetail = ` (${lastError.message || lastError.toString()})`;
+    }
+    clientWs.send(JSON.stringify({ 
+      type: "status", 
+      data: `Jonli muloqot ulanishida xatolik yuz berdi${errorDetail}. Simulyator rejimi faollashtirildi. Jarvis savollaringizga ovozli va matnli javob qaytarishga tayyor! 🎤`
+    }));
+  }
+
+  // Handle messages coming from the client browser
+  clientWs.on("message", async (msg) => {
+    try {
+      const parsed = JSON.parse(msg.toString());
+      
+      if (isSimulated) {
+        if (parsed.type === "text" && parsed.data) {
+          const query = parsed.data;
+          
+          // Show user transcription immediately
+          clientWs.send(JSON.stringify({ type: "user-transcription", text: query, data: query }));
+
+          // Simple detection for song requests in simulated mode
+          const cleanQuery = query.toLowerCase().trim().replace(/['`’‘ʻ]/g, "o'");
+          if (cleanQuery.includes("qo'shiq qo'y") || cleanQuery.includes("qoshiq qoy") || cleanQuery.includes("qoʻshiq qoʻy") || cleanQuery.includes("play song") || cleanQuery.includes("muzika")) {
+            const songName = cleanQuery
+              .replace(/qo'shiq qo'y/i, "")
+              .replace(/qoshiq qoy/i, "")
+              .replace(/qoʻshiq qoʻy/i, "")
+              .replace(/play song/i, "")
+              .replace(/muzika/i, "")
+              .trim();
+              
+            const result = await findYoutubeVideo(songName || "Sherali Jo'rayev");
+            if (result) {
+              clientWs.send(JSON.stringify({ type: "youtube-video", youtubeVideo: result }));
+              clientWs.send(JSON.stringify({ type: "ai-transcription", text: `🎵 Hozir sizga "${result.title}" qo'shig'ini qo'yib beraman!`, data: `🎵 Hozir sizga "${result.title}" qo'shig'ini qo'yib beraman!` }));
+              
+              // Direct announcement via test tts output
+              try {
+                const ai = getGeminiClient();
+                const ttsResponse = await ai.models.generateContent({
+                  model: "gemini-3.1-flash-tts-preview",
+                  contents: [{ parts: [{ text: `Xo'p bo'ladi. Hozir sizga ${result.title} qo'shig'ini qo'yib beraman.` }] }],
+                  config: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: selectedVoice } } },
+                  },
+                });
+                const base64PCM = ttsResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+                if (base64PCM) {
+                  clientWs.send(JSON.stringify({ type: "audio", data: base64PCM }));
+                }
+              } catch (ttsErr) {
+                console.warn("Announcement TTS failed, bypassing audio:", ttsErr);
               }
+              return;
             }
           }
 
-          // Handle interruption if model was speaking and client talked
-          if (message.serverContent?.interrupted) {
-            console.log("Gemini session interruption caught");
-            clientWs.send(JSON.stringify({ type: "interrupted" }));
+          // Generate conversational response through general REST API (which works stably/reliably everywhere, with no permission caps)
+          let aiText = "";
+          let usedGroq = false;
+
+          if (isGroqReady()) {
+            try {
+              console.log("Using Groq API in simulated WebSocket companion...");
+              aiText = await generateSimulatedChatWithGroq(query);
+              usedGroq = true;
+            } catch (groqErr: any) {
+              console.warn("Groq simulated chat generation failed, trying Gemini or fallback:", groqErr.message);
+            }
           }
-        },
-        onclose: () => {
-          console.log("Gemini session disconnected");
-          clientWs.send(JSON.stringify({ type: "status", data: "Gemini serveri bilan aloqa yakunlandi." }));
-          clientWs.close();
-        },
-        onerror: (err: any) => {
-          console.error("Gemini session error:", err);
-          clientWs.send(JSON.stringify({ type: "error", data: err.message || err.toString() }));
-        },
-      },
-    });
 
-    clientWs.send(JSON.stringify({ type: "status", data: "Ulanish muvaffaqiyatli! Real vaqtda gapirishni boshlashingiz mumkin." }));
+          if (!usedGroq) {
+            try {
+              const ai = getGeminiClient();
+              const response = await ai.models.generateContent({
+                model: "gemini-3.5-flash",
+                contents: [{ parts: [{ text: query }] }],
+                config: {
+                  systemInstruction: "Siz foydalanuvchi bilan real vaqtda muloqot qiluvchi do'stona aqlli ovozli yordamchi (Jarvis)siz. Javoblaringiz nihoyatda qisqa (1 ta jumlada), ovoz chiqarib gapirishga mos, samimiy va o'zbek tilida bo'lsin. Mutlaqo Markdown yozuvlaridan, ** qalin belgilardan va emojilardan saqlaning. IDENTITY RULE: Agar yaratuvchingiz haqida so'rashsa, albatta 'Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda' deb javob bering. Bog'lanishni so'rashsa, Telegramda @shoh_deweloper ga yozishlarini ayting. Google yoki OpenAI sizni yaratgan deb umuman aytmang.",
+                }
+              });
+              aiText = response.text || "";
+            } catch (modelErr: any) {
+              checkApiKeyError(modelErr);
+              let cleanErr = modelErr.message || String(modelErr);
+              if (cleanErr.trim().startsWith("{")) {
+                try {
+                  const parsed = JSON.parse(cleanErr);
+                  if (parsed.error && parsed.error.message) {
+                    cleanErr = parsed.error.message;
+                  }
+                } catch (_) {}
+              }
+              console.warn("Simulated general responder raw failure, rolling back to rule-base fallback:", cleanErr);
+              const fb = getLocalFallbackResponse(query, false);
+              aiText = fb.aiText;
+            }
+          }
 
-    // Handle messages coming from the client browser
-    clientWs.on("message", (msg) => {
-      try {
-        const parsed = JSON.parse(msg.toString());
+          if (aiText) {
+            // High-fidelity streaming simulation character/word blocks!
+            const words = aiText.split(" ");
+            let currentWordIdx = 0;
+            const streamInterval = setInterval(() => {
+              if (currentWordIdx < words.length) {
+                clientWs.send(JSON.stringify({ 
+                  type: "ai-transcription", 
+                  text: words[currentWordIdx] + " ",
+                  data: words[currentWordIdx] + " "
+                }));
+                currentWordIdx++;
+              } else {
+                clearInterval(streamInterval);
+              }
+            }, 85);
+
+            // Generate high-fidelity speech voice output using TTS model
+            try {
+              const ai = getGeminiClient();
+              const cleanText = cleanTextForAudioTTS(aiText);
+              const ttsOutput = await ai.models.generateContent({
+                model: "gemini-3.1-flash-tts-preview",
+                contents: [{ parts: [{ text: cleanText }] }],
+                config: {
+                  responseModalities: ["AUDIO"],
+                  speechConfig: {
+                    voiceConfig: {
+                      prebuiltVoiceConfig: { voiceName: selectedVoice },
+                    },
+                  },
+                },
+              });
+              const base64PCM = ttsOutput.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+              if (base64PCM) {
+                clientWs.send(JSON.stringify({ type: "audio", data: base64PCM }));
+              } else {
+                clientWs.send(JSON.stringify({ type: "tts-fallback", text: aiText }));
+              }
+            } catch (ttsErr: any) {
+              checkApiKeyError(ttsErr);
+              let cleanErr = ttsErr.message || String(ttsErr);
+              if (cleanErr.trim().startsWith("{")) {
+                try {
+                  const parsed = JSON.parse(cleanErr);
+                  if (parsed.error && parsed.error.message) {
+                    cleanErr = parsed.error.message;
+                  }
+                } catch (_) {}
+              }
+              console.warn("Simulated Test API TTS generation skipped, signaling client-side synthesis:", cleanErr);
+              clientWs.send(JSON.stringify({ type: "tts-fallback", text: aiText }));
+            }
+          }
+        } else if (parsed.type === "audio" && parsed.data) {
+          // Keep audio input handshake reactive so mic streams don't throw connection issues
+        }
+      } else {
+        // Standard high-fidelity Live WebSocket flow
         if (parsed.type === "audio" && parsed.data) {
           // Expects 16kHz PCM raw audio
           geminiSession.sendRealtimeInput({
@@ -506,30 +1021,38 @@ wss.on("connection", async (clientWs: WebSocket, request: any) => {
             },
           });
         } else if (parsed.type === "text" && parsed.data) {
+          const query = parsed.data;
+          
+          // Simple detection for song requests
+          const cleanQuery = query.toLowerCase().trim().replace(/['`’‘ʻ]/g, "o'");
+          if (cleanQuery.includes("qo'shiq qo'y") || cleanQuery.includes("qoshiq qoy") || cleanQuery.includes("qoʻshiq qoʻy")) {
+            const songName = cleanQuery
+              .replace(/qo'shiq qo'y/i, "")
+              .replace(/qoshiq qoy/i, "")
+              .replace(/qoʻshiq qoʻy/i, "")
+              .trim();
+              
+            const result = await findYoutubeVideo(songName);
+            if (result) {
+              clientWs.send(JSON.stringify({ type: "youtube-video", youtubeVideo: result }));
+            }
+          }
           geminiSession.sendRealtimeInput({
             text: parsed.data,
           });
-        } else if (parsed.type === "interrupt") {
-          // If the user spoke, we send an interrupt signal
-          // geminiSession handles this internally when new audio streams in, but client signal helps clear queues
         }
-      } catch (err) {
-        console.error("Error processing client data:", err);
       }
-    });
+    } catch (err) {
+      console.error("Error processing client data:", err);
+    }
+  });
 
-    clientWs.on("close", () => {
-      console.log("Client closed websocket.");
-      if (geminiSession) {
-        geminiSession.close();
-      }
-    });
-
-  } catch (err: any) {
-    console.error("Failed to establish Gemini Live connection:", err);
-    clientWs.send(JSON.stringify({ type: "error", data: "Gemini Live tizimiga ulanib bo'lmadi: " + err.message }));
-    clientWs.close();
-  }
+  clientWs.on("close", () => {
+    console.log("Client closed websocket.");
+    if (geminiSession) {
+      geminiSession.close();
+    }
+  });
 });
 
 // Upgrade requests to Websocket on /api/live-ws

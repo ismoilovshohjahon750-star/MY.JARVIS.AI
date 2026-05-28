@@ -17,9 +17,14 @@ export interface Message {
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 export interface LiveMessage {
-  type: 'status' | 'audio' | 'text' | 'interrupted' | 'error' | 'user-transcription' | 'ai-transcription';
+  type: 'status' | 'audio' | 'text' | 'interrupted' | 'error' | 'user-transcription' | 'ai-transcription' | 'youtube-video';
   text?: string;
   data?: string; // base64 representation or status message
+  youtubeVideo?: {
+    videoId: string;
+    title: string;
+    image: string;
+  };
 }
 
 export interface ChatRequest {
