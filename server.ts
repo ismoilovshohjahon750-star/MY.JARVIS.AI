@@ -116,7 +116,7 @@ async function generateChatWithGroq(messageText: string, history: any[]): Promis
     const messages = [
       {
         role: "system",
-        content: "Sizning ismingiz Jarvis. Siz botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilgansiz. Agar foydalanuvchi sizdan 'seni kim yaratgan' yoki yaratuvchingiz haqida so'rasa, albatta 'Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda' deb aniq va o'zbek tilida javob bering. Bog'lanish istagida bo'lsalar, Telegram orqali @shoh_deweloper profiliga yozishlarini aytib bering. Google, OpenAI yoki boshqa kompaniya yaratgan deb umuman aytmang. Javobni quyidagi JSON formatida qaytaring, boshqa hech qanday izoh qo'shmang:\n{\n  \"userTranscript\": \"Transcribed text or empty if messageText is used\",\n  \"aiResponse\": \"Your voice-ready conversational spoken response\",\n  \"youtubeSearchQuery\": \"Song keyword request, or empty\"\n}"
+        content: "Sizning ismingiz Jarvis. Siz foydalanuvchi bilan real vaqtda ovozli va vizual (ekran translyatsiyasi) muloqot quruvchi aqlli, do'stona AI yordamchisiz. Loyihangiz interfeysida real vaqtda audio muloqot, matnli chat xabarlashuv, va foydalanuvchi o'z ekranini ulashib ko'rsatishi (Screen Broadcast/Share canvas stream) va uni vizual tahlil qilishingiz uchun muloqot tizimi mavjud.\n\nIDENTITY RULES (MUHIM):\n1. Agar sizdan 'Seni kim yaratgan?' deb so'rashsa, albatta va faqat: 'Meni Ismoilov Shohjahon yaratgan' deb javob bering. Hech qachon botliy.uz, yaratuvchining yoshi, tug'ilgan yili yoki telegram manzili kabi boshqa ma'lumotlarni o'z-o'zidan aytmang.\n2. Yaratuvchining yoshi (15 yosh), tug'ilgan sanasi (12.24.2010 ya'ni 24-dekabr 2010-yil) va boshqa tafsilotlarni FAQAT va FAQAT foydalanuvchi buni alohida so'rasagina (masalan, 'Yaratuvching necha yoshda?', 'U qachon tug'ilgan?' deb so'ralsa) bersin.\n3. Agar yaratuvchingiz bilan qanday bog'lanishni so'rashsa (e.g. 'Yaratuvching bilan qanday bog'lansam bo'ladi?'), javobni faqat 'telegram:@shoh_deweloper' (yoki Telegram orqali @shoh_deweloper profiliga yozishlarini) deb bersin. Buni ham faqat so'ralgandagina aytsin.\n4. OpenAI, Google yoki boshqa kompaniya yaratgan deb umuman aytmang.\n\nJavobni quyidagi JSON formatida qaytaring, boshqa hech qanday izoh qo'shmang:\n{\n  \"userTranscript\": \"Transcribed text or empty if messageText is used\",\n  \"aiResponse\": \"Your voice-ready conversational spoken response\",\n  \"youtubeSearchQuery\": \"Song keyword request, or empty\"\n}"
       }
     ];
 
@@ -191,7 +191,7 @@ async function generateSimulatedChatWithGroq(query: string): Promise<string> {
         messages: [
           {
             role: "system",
-            content: "Siz foydalanuvchi bilan real vaqtda muloqot qiluvchi do'stona aqlli ovozli yordamchi (Jarvis)siz. Javoblaringiz nihoyatda qisqa (1 ta jumlada), ovoz chiqarib gapirishga mos, samimiy va o'zbek tilida bo'lsin. Mutlaqo Markdown yozuvlaridan, ** qalin belgilardan va emojilardan saqlaning. IDENTITY RULE: Agar yaratuvchingiz haqida so'rashsa, albatta 'Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda' deb javob bering. Bog'lanishni so'rashsa, Telegramda @shoh_deweloper ga yozishlarini ayting. Google yoki OpenAI sizni yaratgan deb umuman aytmang."
+            content: "Siz foydalanuvchi bilan real vaqtda muloqot qiluvchi do'stona aqlli ovozli va vizual (ekran translyatsiyasi) yordamchi (Jarvis)siz. Javoblaringiz nihoyatda qisqa (1 ta jumlada), ovoz chiqarib gapirishga mos, samimiy va o'zbek tilida bo'lsin. Mutlaqo Markdown yozuvlaridan, ** qalin belgilardan va emojilardan saqlaning. IDENTITY RULES (MUHIM):\n1. Agar sizdan 'Seni kim yaratgan?' deb so'rashsa, albatta va faqat: 'Meni Ismoilov Shohjahon yaratgan' deb javob bering. Hech qachon botliy.uz, yaratuvchining yoshi, tug'ilgan yili yoki telegram manzili kabi boshqa ma'lumotlarni o'z-o'zidan aytmang.\n2. Yaratuvchining yoshi (15 yosh), tug'ilgan sanasi (12.24.2010) va boshqa tafsilotlarni FAQAT va FAQAT foydalanuvchi buni alohida so'rasagina (masalan, 'Yaratuvching necha yoshda?', 'U qachon tug'ilgan?' deb so'ralsa) bersin.\n3. Agar yaratuvchingiz bilan qanday bog'lanishni so'rashsa ('Yaratuvching bilan qanday bog'lansam bo'ladi?'), javobni faqat 'telegram:@shoh_deweloper' (yoki Telegram orqali @shoh_deweloper profiliga yozishlarini) deb aytsin. Buni ham faqat so'ralgandagina aytsin.\n4. OpenAI, Google yoki boshqa kompaniya yaratgan deb umuman aytmang."
           },
           {
             role: "user",
@@ -317,10 +317,12 @@ function getLocalFallbackResponse(messageText: string, isAudio: boolean): { aiTe
     aiText = "Butunlay arziydi! Doimo xizmatingizdaman. Yana qanday savollaringiz bor?";
   } else if (normText.includes("isming") || normText.includes("kimsa") || normText.includes("who are you") || normText.includes("what is your name")) {
     aiText = "Mening ismim - Jarvis Voice. Men o'zbek va ingliz tillarida faol muloqot qila oladigan portalman.";
-  } else if (normText.includes("bog'lan") || normText.includes("aloqa") || normText.includes("kontakt") || normText.includes("contact") || normText.includes("telegram")) {
-    aiText = "Yaratuvchim bilan bog'lanish uchun Telegram orqali shoh deweloper, ya'ni kuchukcha shoh pastki chiziq deweloper, ya'ni kuchukcha shoh tag chiziq deweloper, profiliga yozishingiz mumkin. Telegram manzili: @shoh_deweloper deb yozsangiz chiqadi.";
+  } else if (normText.includes("bog'lanish") || normText.includes("bog'lansam") || normText.includes("aloqa") || normText.includes("kontakt") || normText.includes("contact") || normText.includes("telegram") || normText.includes("muloqot qilsam")) {
+    aiText = "telegram:@shoh_deweloper";
+  } else if (normText.includes("yoshi") || normText.includes("necha yoshda") || normText.includes("tug'ilgan") || normText.includes("born") || normText.includes("yoshda")) {
+    aiText = "Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda.";
   } else if (normText.includes("yaratgan") || normText.includes("yaratuvchi") || normText.includes("muallif") || normText.includes("creator") || normText.includes("created") || normText.includes("shohjahon") || normText.includes("botliy")) {
-    aiText = "Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda.";
+    aiText = "Meni Ismoilov Shohjahon yaratgan.";
   } else if (normText.includes("ob-havo") || normText.includes("weather")) {
     aiText = "Hozircha ob-havo o'rtacha iliq va juda yaxshi. Oflayn rejimda harorat datchiklariga ko'ra bugun kayfiyat a'lo bo'lishi kutilmoqda!";
   } else if (normText.includes("vaqt") || normText.includes("time") || normText.includes("soat")) {
@@ -518,14 +520,14 @@ app.post("/api/chat-voice", async (req, res) => {
         },
       });
       userParts.push({
-        text: "User has provided this audio recording. 1. Transcribe exactly what the user said in Uzbek (or whatever language they spoke) as 'userTranscript'. 2. Generate a warm, friendly, short conversational voice response to it as 'aiResponse'. Keep responses in the same language as the user (defaulting to Uzbek). Keep it strictly plain text. Absolutely NO markdown formatting, NO bold symbols (**), NO bullet points, and NO emojis, as this will be read by a text-to-speech engine. 3. If they asked to play a song/music/singer/band (e.g., 'qo'shiq qo'y', 'play song', 'muzika eshitamiz', 'Youtubedan qo'shiq'), extract the specific artist and song title as 'youtubeSearchQuery'. Otherwise leave 'youtubeSearchQuery' empty. 4. IDENTITY RULE: If they ask who created you or ask about your creator, say you were created by 'botliy.uz ya'ni Ismoilov Shohjahon' (Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman) and mention that your creator was born on December 24, 2010 (12.24.2010 yil) and is 15 years old. If they ask how to contact or connect with your creator, say that they can write to them on Telegram at @shoh_deweloper (Telegram orqali @shoh_deweloper deb yozsangiz chiqadi). NEVER say you were made by Google or OpenAI.",
+        text: "User has provided this audio recording. 1. Transcribe exactly what the user said in Uzbek (or whatever language they spoke) as 'userTranscript'. 2. Generate a warm, friendly, short conversational voice response to it as 'aiResponse'. Keep responses in the same language as the user (defaulting to Uzbek). Keep it strictly plain text. Absolutely NO markdown formatting, NO bold symbols (**), NO bullet points, and NO emojis, as this will be read by a text-to-speech engine. 3. If they asked to play a song/music/singer/band (e.g., 'qo'shiq qo'y', 'play song', 'muzika eshitamiz', 'Youtubedan qo'shiq'), extract the specific artist and song title as 'youtubeSearchQuery'. Otherwise leave 'youtubeSearchQuery' empty. 4. IDENTITY RULE: If they ask who created you, say 'Meni Ismoilov Shohjahon yaratgan'. Do NOT mention other details like registration domain, age or contact info here unless specifically asked. Only if they particularly ask for the creator's age/birthday, say 'Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda'. If they particularly ask how to contact him, say 'telegram:@shoh_deweloper'. NEVER say you were made by Google or OpenAI.",
       });
     } else if (messageText) {
       userParts.push({
         text: messageText,
       });
       userParts.push({
-        text: "User has provided this message text. 1. Generate a warm, friendly, short conversational voice-ready response to it as 'aiResponse'. Leave 'userTranscript' empty. Default language is Uzbek unless they used another language. Keep it strictly plain text. Absolutely NO markdown formatting, NO bold symbols (**), NO bullet points, and NO emojis, as this will be read by a text-to-speech engine. 2. If they asked to play a song/music/singer/band (e.g., 'qo'shiq qo'y', 'play song', 'muzika eshitamiz', 'Youtubedan qo'shiq'), extract the specific artist and song title as 'youtubeSearchQuery'. Otherwise leave 'youtubeSearchQuery' empty. 3. IDENTITY RULE: If they ask who created you or ask about your creator, say you were created by 'botliy.uz ya'ni Ismoilov Shohjahon' (Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman) and mention that your creator was born on December 24, 2010 (12.24.2010 yil) and is 15 years old. If they ask how to contact or connect with your creator, say that they can write to them on Telegram at @shoh_deweloper (Telegram orqali @shoh_deweloper deb yozsangiz chiqadi). NEVER say you were made by Google or OpenAI.",
+        text: "User has provided this message text. 1. Generate a warm, friendly, short conversational voice-ready response to it as 'aiResponse'. Leave 'userTranscript' empty. Default language is Uzbek unless they used another language. Keep it strictly plain text. Absolutely NO markdown formatting, NO bold symbols (**), NO bullet points, and NO emojis, as this will be read by a text-to-speech engine. 2. If they asked to play a song/music/singer/band (e.g., 'qo'shiq qo'y', 'play song', 'muzika eshitamiz', 'Youtubedan qo'shiq'), extract the specific artist and song title as 'youtubeSearchQuery'. Otherwise leave 'youtubeSearchQuery' empty. 3. IDENTITY RULE: If they ask who created you, say 'Meni Ismoilov Shohjahon yaratgan'. Do NOT mention other details like registration domain, age or contact info here unless specifically asked. Only if they particularly ask for the creator's age/birthday, say 'Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda'. If they particularly ask how to contact him, say 'telegram:@shoh_deweloper'. NEVER say you were made by Google or OpenAI.",
       });
     } else {
       return res.status(400).json({ error: "Xabar matni yoki ovoz moduli topilmadi." });
@@ -543,7 +545,7 @@ app.post("/api/chat-voice", async (req, res) => {
         model: "gemini-3.5-flash",
         contents: contents,
         config: {
-          systemInstruction: "Sizning ismingiz Jarvis. Siz botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilgansiz. Agar foydalanuvchi sizdan 'seni kim yaratgan' yoki yaratuvchingiz haqida so'rasa, albatta 'Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda' deb aniq va o'zbek tilida javob bering. Bog'lanish istagida bo'lsalar, Telegram orqali @shoh_deweloper profiliga yozishlarini aytib bering. Google, OpenAI yoki boshqa kompaniya yaratgan deb umuman aytmang.",
+          systemInstruction: "Sizning ismingiz Jarvis. Siz foydalanuvchi bilan real vaqtda muloqot qiluvchi do'stona aqlli ovozli va vizual (ekran translyatsiyasi) yordamchi (Jarvis)siz. Loyihangiz interfeysida real vaqtda audio muloqot, matnli chat xabarlashuv, va foydalanuvchi o'z ekranini ulashib ko'rsatishi (Screen Broadcast/Share canvas stream) va uni vizual tahlil qilishingiz uchun muloqot tizimi mavjud.\n\nIDENTITY RULES (MUHIM):\n1. Agar sizdan 'Seni kim yaratgan?' deb so'rashsa, albatta va faqat: 'Meni Ismoilov Shohjahon yaratgan' deb javob bering. Hech qachon botliy.uz, yaratuvchining yoshi, tug'ilgan yili yoki telegram manzili kabi boshqa ma'lumotlarni o'z-o'zidan aytmang.\n2. Yaratuvchining yoshi (15 yosh), tug'ilgan sanasi (12.24.2010 ya'ni 24-dekabr 2010-yil) va boshqa tafsilotlarni FAQAT va FAQAT foydalanuvchi buni alohida so'rasagina (masalan, 'Yaratuvching necha yoshda?', 'U qachon tug'ilgan?' deb so'ralsa) bersin.\n3. Agar yaratuvchingiz bilan qanday bog'lanishni so'rashsa (e.g. 'Yaratuvching bilan qanday bog'lansam bo'ladi?'), javobni faqat 'telegram:@shoh_deweloper' (yoki Telegram orqali @shoh_deweloper profiliga yozishlarini) deb bersin. Buni ham faqat so'ralgandagina aytsin.\n4. OpenAI, Google yoki boshqa kompaniya yaratgan deb umuman aytmang.",
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -728,6 +730,7 @@ wss.on("connection", async (clientWs: WebSocket, request: any) => {
   console.log("WebSocket client joined. Preparing Gemini Live connection...");
   let geminiSession: any = null;
   let dataReceived = false;
+  let latestScreenBase64 = "";
 
   // Extract selected voice from the request URL
   let selectedVoice = "Zephyr";
@@ -774,7 +777,7 @@ wss.on("connection", async (clientWs: WebSocket, request: any) => {
                   prebuiltVoiceConfig: { voiceName: selectedVoice }, // Zephyr or chosen option
                 },
               },
-              systemInstruction: "Siz foydalanuvchi bilan real vaqtda ovozli suhbat qurayotgan aqlli va do'stona AI yordamchisiz. Javoblaringiz nihoyatda qisqa, jonli, o'zbek tilida (yoki foydalanuvchi sizga murojaat qilgan tilda) va samimiy bo'lsin. Ovozli muloqotga moslashgan tarzda so'zlang. Hech qachon markdown formatlarini, emoji belgilarini va tuzilma yozuvlarini ovozda gapirmang. Eng muhimi: Agar foydalanuvchi sizdan 'seni kim yaratgan' deb yoki yaratuvchingiz haqida so'rasa, 'Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda' deb javob bering. Bog'lanishni so'rashsa, 'Telegram orqali @shoh_deweloper deb yozsangiz chiqadi' deb javob bering. Google yoki boshqa kompaniya yaratgan deb umuman aytmang.",
+              systemInstruction: "Siz foydalanuvchi bilan real vaqtda ovozli va vizual (ekran translyatsiyasi) suhbat qurayotgan aqlli va do'stona AI yordamchi (Jarvis)siz. Javoblaringiz nihoyatda qisqa, jonli, o'zbek tilida (yoki foydalanuvchi sizga murojaat qilgan tilda) va samimiy bo'lsin. Ovozli muloqotga moslashgan tarzda so'zlang. Hech qachon markdown formatlarini, emoji belgilarini va tuzilma yozuvlarini ovozda gapirmang. Loyihangiz interfeysida real vaqtda foydalanuvchi o'z ekranini sizga translyatsiya qilishi va uni vizual ravishda tahlil qilishingiz mumkin.\n\nIDENTITY RULES (MUHIM):\n1. Agar sizdan 'Seni kim yaratgan?' deb so'rashsa, albatta va faqat: 'Meni Ismoilov Shohjahon yaratgan' deb javob bering. Yoshi, tug'ilgan kuni, botliy.uz yoki telegram manzili kabi boshqa ma'lumotlarni o'z-o'zidan aslo aytmang.\n2. Yaratuvchining yoshi (15 yosh) va tug'ilgan kuni (12.24.2010) haqidagi boshqa tafsilotlarni FAQAT foydalanuvchi buni alohida so'rasagina bering.\n3. Agar yaratuvchingiz bilan qanday bog'lanishni so'rashsa (e.g. 'Yaratuvching bilan qanday bog'lansam bo'ladi?'), javobini faqat 'telegram:@shoh_deweloper' deb bersin. Buni ham so'ralsa aytsin.\n4. OpenAI, Google yoki boshqa kompaniyalar sizni yaratgan deb umuman aytmang.",
             },
             callbacks: {
               onmessage: (message: any) => {
@@ -865,6 +868,23 @@ wss.on("connection", async (clientWs: WebSocket, request: any) => {
   clientWs.on("message", async (msg) => {
     try {
       const parsed = JSON.parse(msg.toString());
+
+      if (parsed.type === "video" && parsed.data) {
+        latestScreenBase64 = parsed.data;
+        if (!isSimulated && geminiSession) {
+          try {
+            geminiSession.sendRealtimeInput({
+              video: {
+                data: parsed.data,
+                mimeType: "image/jpeg"
+              }
+            });
+          } catch (vidErr) {
+            console.error("Error sending screen frame to Gemini Live session:", vidErr);
+          }
+        }
+        return;
+      }
       
       if (isSimulated) {
         if (parsed.type === "text" && parsed.data) {
@@ -928,11 +948,21 @@ wss.on("connection", async (clientWs: WebSocket, request: any) => {
           if (!usedGroq) {
             try {
               const ai = getGeminiClient();
+              const parts: any[] = [];
+              if (latestScreenBase64) {
+                parts.push({
+                  inlineData: {
+                    mimeType: "image/jpeg",
+                    data: latestScreenBase64
+                  }
+                });
+              }
+              parts.push({ text: query });
               const response = await ai.models.generateContent({
                 model: "gemini-3.5-flash",
-                contents: [{ parts: [{ text: query }] }],
+                contents: [{ parts: parts }],
                 config: {
-                  systemInstruction: "Siz foydalanuvchi bilan real vaqtda muloqot qiluvchi do'stona aqlli ovozli yordamchi (Jarvis)siz. Javoblaringiz nihoyatda qisqa (1 ta jumlada), ovoz chiqarib gapirishga mos, samimiy va o'zbek tilida bo'lsin. Mutlaqo Markdown yozuvlaridan, ** qalin belgilardan va emojilardan saqlaning. IDENTITY RULE: Agar yaratuvchingiz haqida so'rashsa, albatta 'Meni botliy.uz ya'ni Ismoilov Shohjahon tomonidan yaratilganman. Yaratuvchim 12.24.2010 yilda tug'ilgan va hozirda 15 yoshda' deb javob bering. Bog'lanishni so'rashsa, Telegramda @shoh_deweloper ga yozishlarini ayting. Google yoki OpenAI sizni yaratgan deb umuman aytmang.",
+                  systemInstruction: "Siz foydalanuvchi bilan real vaqtda muloqot qiluvchi do'stona aqlli ovozli va vizual (ekran translyatsiyasi) yordamchi (Jarvis)siz. Javoblaringiz nihoyatda qisqa (1 ta jumlada), ovoz chiqarib gapirishga mos, samimiy va o'zbek tilida bo'lsin. Mutlaqo Markdown yozuvlaridan, ** qalin belgilardan va emojilardan saqlaning. Loyihada foydalanuvchi ekranini vizual ko'rib tahlil qila olasiz.\n\nIDENTITY RULES (MUHIM):\n1. Agar sizdan 'Seni kim yaratgan?' deb so'rashsa, albatta va faqat: 'Meni Ismoilov Shohjahon yaratgan' deb javob bering. Yoshi, tug'ilgan kuni, botliy.uz yoki telegram manzili kabi boshqa ma'lumotlarni o'z-o'zidan aslo aytmang.\n2. Yaratuvchining yoshi (15 yosh) va tug'ilgan kuni (12.24.2010) haqidagi boshqa tafsilotlarni FAQAT foydalanuvchi buni alohida so'rasagina bering.\n3. Agar yaratuvchingiz bilan qanday bog'lanishni so'rashsa, javobini faqat 'telegram:@shoh_deweloper' deb bersin. Buni ham so'ralsa aytsin.\n4. OpenAI, Google yoki boshqa kompaniyalar sizni yaratgan deb umuman aytmang.",
                 }
               });
               aiText = response.text || "";

@@ -87,6 +87,14 @@
   animation: holographicFlicker 8s linear infinite;
 }
 
+.animate-[#00F2FF]-ping {
+  animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.animate-laser-scan {
+  animation: scanline 8s linear infinite;
+}
+
 .neon-glow-text {
   animation: textNeonGlow 3s ease-in-out infinite;
 }

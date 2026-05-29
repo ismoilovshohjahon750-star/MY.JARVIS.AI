@@ -7,7 +7,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { 
   Mic, MicOff, MessageSquare, Volume2, VolumeX, Radio, Play, Pause, Send,
   Trash2, Globe, Wifi, ServerCrash, AudioLines, Sparkles, RefreshCw, AlertCircle, ExternalLink,
-  Cpu, Shield, Terminal, Zap, Clock, Activity, Headphones
+  Cpu, Shield, Terminal, Zap, Clock, Activity, Headphones, Monitor
 } from "lucide-react";
 import { Message, ConnectionState, LiveMessage } from "./types";
 import { motion, AnimatePresence } from "motion/react";
@@ -141,6 +141,15 @@ export default function App() {
   const [micPermError, setMicPermError] = useState<boolean>(false);
   const [isLiveSimulated, setIsLiveSimulated] = useState<boolean>(false);
   const isLiveSimulatedRef = useRef<boolean>(false);
+
+  // Screen sharing states and refs
+  const [isScreenSharing, setIsScreenSharing] = useState<boolean>(false);
+  const [visualMode, setVisualMode] = useState<"screen" | "camera" | "file">("screen");
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [showScreenShareErrorModal, setShowScreenShareErrorModal] = useState<boolean>(false);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const screenIntervalRef = useRef<any>(null);
+  const screenVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const setLiveSimulatedWithRef = (val: boolean) => {
     setIsLiveSimulated(val);
@@ -791,6 +800,258 @@ export default function App() {
 
 
   // -------------------------------------------------------------
+  // SCREEN SHARING AND VISUAL ANALYSIS BRIDGE
+  // -------------------------------------------------------------
+
+  const stopScreenShare = () => {
+    setIsScreenSharing(false);
+    addLog(lang === "uz" ? "Ekran translyatsiyasi to'xtatildi." : "Screen broadcasting stopped.");
+    if (screenIntervalRef.current) {
+      clearInterval(screenIntervalRef.current);
+      screenIntervalRef.current = null;
+    }
+    if (screenStreamRef.current) {
+      try {
+        screenStreamRef.current.getTracks().forEach((track) => track.stop());
+      } catch (e) {}
+      screenStreamRef.current = null;
+    }
+  };
+
+  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        const resultString = event.target.result as string;
+        setUploadedImage(resultString);
+        addLog(lang === "uz" ? "Muvaffaqiyatli yuklandi. 'EKRAN ULASHISH' tugmasini bosing." : "Successfully uploaded. Press 'SHARE SCREEN' to begin broadcast.");
+        
+        if (isScreenSharing && visualMode === "file") {
+          if (screenIntervalRef.current) clearInterval(screenIntervalRef.current);
+          
+          const img = new Image();
+          img.src = resultString;
+          img.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 320;
+            canvas.height = 240;
+            const ctx = canvas.getContext("2d");
+            ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+            const base64Data = dataUrl.split(",")[1];
+            if (base64Data) {
+              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: "video", data: base64Data }));
+              }
+              screenIntervalRef.current = setInterval(() => {
+                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(JSON.stringify({ type: "video", data: base64Data }));
+                }
+              }, 1500);
+            }
+          };
+        }
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const startStreamWithScreen = async () => {
+    addLog(lang === "uz" ? "Ekran translyatsiyasi ruxsati so'ralmoqda..." : "Requesting screen translation permission...");
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        frameRate: { ideal: 5 }
+      },
+      audio: false
+    });
+    screenStreamRef.current = stream;
+
+    const videoEl = document.createElement("video");
+    videoEl.srcObject = stream;
+    videoEl.autoplay = true;
+    videoEl.playsInline = true;
+    videoEl.muted = true;
+    try {
+      await videoEl.play();
+    } catch (e) {
+      console.warn("Buffer video play error handled:", e);
+    }
+
+    if (screenVideoRef.current) {
+      screenVideoRef.current.srcObject = stream;
+      screenVideoRef.current.play().catch(() => {});
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 240;
+    const ctx = canvas.getContext("2d");
+
+    setIsScreenSharing(true);
+    addLog(lang === "uz" ? "Ekran translyatsiyasi faollashtirildi! 🖥️" : "Screen sharing stream is live! 🖥️");
+
+    stream.getVideoTracks()[0].onended = () => {
+      stopScreenShare();
+    };
+
+    screenIntervalRef.current = setInterval(() => {
+      if (!screenStreamRef.current) return;
+      if (videoEl.readyState >= videoEl.HAVE_CURRENT_DATA) {
+        ctx?.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+        const base64Data = dataUrl.split(",")[1];
+        if (base64Data) {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: "video", data: base64Data }));
+          }
+        }
+      }
+    }, 1500);
+  };
+
+  const startStreamWithCamera = async () => {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+      throw new Error(lang === "uz" 
+        ? "Kamera datchigi topilmadi yoki u brauzerda bloklangan." 
+        : "Camera not found or blocked in browser settings.");
+    }
+    addLog(lang === "uz" ? "Kamera datchigi faollashtirilmoqda..." : "Initializing camera feed...");
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: { ideal: 320 },
+        height: { ideal: 240 },
+        frameRate: { ideal: 10 }
+      },
+      audio: false
+    });
+    screenStreamRef.current = stream;
+
+    const videoEl = document.createElement("video");
+    videoEl.srcObject = stream;
+    videoEl.autoplay = true;
+    videoEl.playsInline = true;
+    videoEl.muted = true;
+    try {
+      await videoEl.play();
+    } catch (e) {
+      console.warn("Camera buffer video play error handled:", e);
+    }
+
+    if (screenVideoRef.current) {
+      screenVideoRef.current.srcObject = stream;
+      screenVideoRef.current.play().catch(() => {});
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 240;
+    const ctx = canvas.getContext("2d");
+
+    setIsScreenSharing(true);
+    addLog(lang === "uz" ? "Kamera optik ko'zlari faollashtirildi! 📷" : "Camera optic feed is active! 📷");
+
+    stream.getVideoTracks()[0].onended = () => {
+      stopScreenShare();
+    };
+
+    screenIntervalRef.current = setInterval(() => {
+      if (!screenStreamRef.current) return;
+      if (videoEl.readyState >= videoEl.HAVE_CURRENT_DATA) {
+        ctx?.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+        const base64Data = dataUrl.split(",")[1];
+        if (base64Data) {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: "video", data: base64Data }));
+          }
+        }
+      }
+    }, 1500);
+  };
+
+  const startStreamWithFile = async () => {
+    if (!uploadedImage) {
+      addLog(lang === "uz"
+        ? "Iltimos, avval rasm yoki skrinshot yuklang!"
+        : "Please upload an image or screenshot first!");
+      return;
+    }
+
+    setIsScreenSharing(true);
+    addLog(lang === "uz" ? "Hujjatlar tahlili faol! 🖼️" : "Static document streaming live! 🖼️");
+
+    const img = new Image();
+    img.src = uploadedImage;
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 300;
+      canvas.height = 225;
+      const ctx = canvas.getContext("2d");
+      ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+      const base64Data = dataUrl.split(",")[1];
+
+      if (base64Data) {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: "video", data: base64Data }));
+        }
+
+        screenIntervalRef.current = setInterval(() => {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: "video", data: base64Data }));
+          }
+        }, 1500);
+      }
+    };
+  };
+
+  const startScreenShare = async () => {
+    if (liveState !== "connected") {
+      addLog(lang === "uz" 
+        ? "Avval suhbatni boshlang (Jonli muloqot boshlash), so'ngra ekranni translyatsiya qila olasiz." 
+        : "Please start the live conversation first, then you can stream your screen.");
+      return;
+    }
+
+    const isIframe = typeof window !== "undefined" && window.self !== window.top;
+    const isDisplayMediaMissing = !navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== "function";
+
+    if (visualMode === "screen" && (isIframe || isDisplayMediaMissing)) {
+      setShowScreenShareErrorModal(true);
+      addLog(lang === "uz"
+        ? "Ekran ulashib bo'lmadi (ramka yoki brauzer cheklovi sababli). Iltimos, muqobil usulni tanlang!"
+        : "Could not share screen due to iframe or browser limits. Please choose an alternative!");
+      return;
+    }
+
+    try {
+      if (visualMode === "screen") {
+        try {
+          await startStreamWithScreen();
+        } catch (e: any) {
+          console.warn("Screen share failed:", e);
+          setShowScreenShareErrorModal(true);
+          addLog(lang === "uz"
+            ? "Ekran ulanmadi yoki ruxsat berilmadi."
+            : "Screen share failed or permission was denied.");
+        }
+      } else if (visualMode === "camera") {
+        await startStreamWithCamera();
+      } else {
+        await startStreamWithFile();
+      }
+    } catch (err: any) {
+      console.error("Screen sharing error:", err);
+      addLog(err.message || String(err));
+      stopScreenShare();
+    }
+  };
+
+  // -------------------------------------------------------------
   // REAL-TIME JONLI MULOQOT MODE: Live bidirectional streaming via WebSocket
   // -------------------------------------------------------------
 
@@ -966,6 +1227,7 @@ export default function App() {
   };
 
   const stopLiveMuloqot = () => {
+    stopScreenShare();
     setLiveSpeakingState("idle");
     setLiveState("disconnected");
 
@@ -1485,6 +1747,230 @@ export default function App() {
               )}
 
             </section>
+
+            {/* HIGH-FIDELITY SCREEN BROADCAST CONTROLLERS */}
+            {liveState === "connected" && (
+              <div className="glass-hologram p-5 rounded-2xl border border-[#00F2FF]/15 space-y-3.5 shadow-2xl w-full max-w-xl animate-holo-flicker">
+                {/* Visual Channel Mode Selector Toggles */}
+                <div className="flex gap-1.5 p-1 bg-black/40 rounded-xl border border-white/5 text-[10px] font-mono">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isScreenSharing) stopScreenShare();
+                      setVisualMode("screen");
+                    }}
+                    className={`flex-1 py-1.5 px-2 rounded-lg text-center transition-all cursor-pointer font-bold ${
+                      visualMode === "screen" 
+                        ? "bg-[#00F2FF]/20 text-[#00F2FF] border border-[#00F2FF]/30 font-bold shadow-[0_0_10px_rgba(0,242,255,0.15)]" 
+                        : "text-slate-400 hover:text-slate-200 border border-transparent"
+                    }`}
+                  >
+                    🖥️ {lang === "uz" ? "EKRAN" : "SCREEN"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isScreenSharing) stopScreenShare();
+                      setVisualMode("camera");
+                    }}
+                    className={`flex-1 py-1.5 px-2 rounded-lg text-center transition-all cursor-pointer font-bold ${
+                      visualMode === "camera" 
+                        ? "bg-[#00F2FF]/20 text-[#00F2FF] border border-[#00F2FF]/30 font-bold shadow-[0_0_10px_rgba(0,242,255,0.15)]" 
+                        : "text-slate-400 hover:text-slate-200 border border-transparent"
+                    }`}
+                  >
+                    📷 {lang === "uz" ? "KAMERA" : "CAMERA"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isScreenSharing) stopScreenShare();
+                      setVisualMode("file");
+                    }}
+                    className={`flex-1 py-1.5 px-2 rounded-lg text-center transition-all cursor-pointer font-bold ${
+                      visualMode === "file" 
+                        ? "bg-[#00F2FF]/20 text-[#00F2FF] border border-[#00F2FF]/30 font-bold shadow-[0_0_10px_rgba(0,242,255,0.15)]" 
+                        : "text-slate-400 hover:text-slate-200 border border-transparent"
+                    }`}
+                  >
+                    🖼️ {lang === "uz" ? "RASM" : "IMAGE / DOC"}
+                  </button>
+                </div>
+
+                {/* Iframe display cap warning when Screen mode is loaded and we are in an iframe or getDisplayMedia is missing */}
+                {visualMode === "screen" && (typeof window !== "undefined" && (window.self !== window.top || !navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== "function")) && (
+                  <div className="p-3 bg-amber-950/30 border border-amber-500/30 rounded-xl space-y-2 text-center select-none animate-pulse">
+                    <div className="flex items-center justify-center gap-1.5 text-amber-400 font-mono text-[9px] font-bold uppercase tracking-widest">
+                      <AlertCircle className="h-3 w-3 animate-bounce" />
+                      <span>{lang === "uz" ? "RAMKA CHEKLOVI: EKRAN ULASHISH" : "IFRAME CONSTRAINT: SCREEN BROADCAST"}</span>
+                    </div>
+                    <p className="text-[10px] text-slate-300 leading-relaxed font-sans">
+                      {lang === "uz" 
+                        ? "Google AI Studio ramkasi ichida ekranni to'g'ridan-to'g'ri ulashib bo'lmaydi. Ekranning kodlari yoki skrinshotini uzatish uchun ilovani alohida yangi darchada (tab) ochishingiz kerak. Hozircha esa Kamera yoki Rasm yuklash rejimidan ramka ichida ham foydalanishingiz mumkin."
+                        : "Direct screen capture is blocked within the AI Studio browser iframe. To enable desktop display streaming, open the app in a new tab. For now, you can still use the Camera or Image uploader in this frame."}
+                    </p>
+                    <a
+                      href={typeof window !== "undefined" ? window.location.href : "#"}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-widest py-1.5 px-3.5 bg-[#00F2FF]/10 hover:bg-[#00F2FF]/20 text-[#00F2FF] border border-[#00F2FF]/20 rounded-lg transition-all font-bold cursor-pointer"
+                    >
+                      <span>{lang === "uz" ? "YANGI TABDA OCHISH" : "OPEN IN NEW TAB"}</span>
+                      <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  </div>
+                )}
+
+                <div className="flex justify-between items-center border-b border-[#00F2FF]/10 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <Monitor className={`h-4 w-4 ${isScreenSharing ? "text-red-500 animate-pulse" : "text-slate-400"}`} />
+                    <span className="text-[11px] font-mono font-bold tracking-[2px] uppercase text-slate-100">
+                      {visualMode === "screen" && (lang === "uz" ? "EKRAN TRANSLYATSIYASI" : "SCREEN BROADCAST")}
+                      {visualMode === "camera" && (lang === "uz" ? "KAMERA VIZUAL LENSI" : "CAMERA OPTIC LENS")}
+                      {visualMode === "file" && (lang === "uz" ? "RASM/HUJJAT TAHLILI" : "DOCUMENT ANALYSIS CHANNEL")}
+                    </span>
+                  </div>
+                  <button
+                    onClick={isScreenSharing ? stopScreenShare : startScreenShare}
+                    className={`text-[10px] font-mono uppercase tracking-widest py-1.5 px-3.5 rounded-xl border transition-all cursor-pointer flex items-center gap-1.5 font-bold ${
+                      isScreenSharing 
+                        ? "bg-red-950/40 border-red-500/40 text-red-400 hover:bg-red-900/60 shadow-[0_0_15px_rgba(239,68,68,0.2)]" 
+                        : "bg-[#00F2FF]/10 border-[#00F2FF]/20 text-[#00F2FF] hover:bg-[#00F2FF]/20"
+                    }`}
+                  >
+                    <div className={`h-2 w-2 rounded-full ${isScreenSharing ? "bg-red-500 animate-ping" : "bg-cyan-500"}`} />
+                    <span>
+                      {isScreenSharing 
+                        ? (lang === "uz" ? "TO'XTATISH" : "STOP CHANNEL") 
+                        : (lang === "uz" ? "ULASHISH" : "START SHARE")}
+                    </span>
+                  </button>
+                </div>
+
+                {/* File mode selector uploader rendering */}
+                {visualMode === "file" && (
+                  <div className="p-3 bg-black/50 border border-white/5 rounded-xl space-y-2 text-center">
+                    <p className="text-[10px] text-slate-400 font-mono">
+                      {lang === "uz" ? "MULOQOTDA TAHLIL QILINADIGAN SKRINSHOTNI TANLANG:" : "SELECT A SCREENSHOT/IMAGE TO ANALYZE IN CONVERSATION:"}
+                    </p>
+                    <div className="flex items-center justify-center gap-2">
+                      <label className="text-[9px] font-mono uppercase tracking-wider py-1.5 px-3 bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all cursor-pointer">
+                        📁 {lang === "uz" ? "FAYL TANLASH" : "CHOOSE FILE"}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleImageFileChange}
+                          className="hidden"
+                        />
+                      </label>
+                      {uploadedImage && (
+                        <span className="text-[9px] text-green-400 font-mono">✔️ {lang === "uz" ? "Rasm yuklandi" : "Image is buffered"}</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="relative overflow-hidden rounded-xl border border-white/5 bg-black/50 aspect-video flex items-center justify-center">
+                  {/* Interactive Screen Sharing Guide Overlay if there's a constraint */}
+                  {showScreenShareErrorModal && (
+                    <div className="absolute inset-0 bg-slate-950/95 z-35 flex flex-col items-center justify-center p-4 text-center space-y-2.5 font-mono animate-holo-flicker">
+                      <div className="w-9 h-9 rounded-full bg-red-950/80 border border-red-500/40 flex items-center justify-center text-red-500">
+                        <AlertCircle className="h-4.5 w-4.5 animate-pulse" />
+                      </div>
+                      <div className="space-y-1">
+                        <h4 className="text-[11px] font-bold text-red-400 uppercase tracking-widest leading-none">
+                          {lang === "uz" ? "EKRAN ULASHISH CHEKLOVI" : "SCREEN SHARING SECURED"}
+                        </h4>
+                        <p className="text-[10px] text-slate-300 leading-normal font-sans max-w-[340px] px-2">
+                          {lang === "uz"
+                            ? "Google AI Studio ramkasi ichida ekranni to'g'ridan-to'g'ri ulashib bo'lmaydi. Ekranni ulashish uchun ilovani alohida yangi tabda oching yoki Rasm yuklash/Kamera rejimiga o'ting!"
+                            : "Direct screen capture is blocked within the AI Studio iframe. To share your screen, open the app in a new tab or use Image upload/Camera!"}
+                        </p>
+                      </div>
+                      
+                      <div className="flex flex-row gap-2 w-full max-w-[320px] pt-1 px-4 justify-center">
+                        <a
+                          href={typeof window !== "undefined" ? window.location.href : "#"}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex-1 text-[9px] uppercase tracking-wider py-2 px-2.5 bg-[#00F2FF]/20 hover:bg-[#00F2FF]/35 text-[#00F2FF] border border-[#00F2FF]/30 hover:border-[#00F2FF]/60 rounded-xl transition-all font-bold text-center flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          <span>{lang === "uz" ? "YANGI TAB" : "NEW TAB"}</span>
+                          <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowScreenShareErrorModal(false);
+                            setVisualMode("file");
+                          }}
+                          className="flex-1 text-[9px] uppercase tracking-wider py-2 px-2.5 bg-white/5 hover:bg-white/10 text-white border border-white/10 rounded-xl transition-all font-bold cursor-pointer"
+                        >
+                          🖼️ {lang === "uz" ? "RASM YUKLASH" : "UPLOAD IMAGE"}
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowScreenShareErrorModal(false);
+                          setVisualMode("camera");
+                          startStreamWithCamera().catch(() => {});
+                        }}
+                        className="text-[9px] text-[#00F2FF]/60 hover:text-[#00F2FF] uppercase tracking-widest cursor-pointer hover:underline"
+                      >
+                        📷 {lang === "uz" ? "KAMERADAN FOYDALANISH" : "USE CAMERA CHANNEL"}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* File/Image display */}
+                  {visualMode === "file" && uploadedImage && (
+                    <img 
+                      src={uploadedImage} 
+                      alt="Buffered document frame" 
+                      className="w-full h-full object-contain z-10 relative"
+                    />
+                  )}
+
+                  {/* Standard screen/video capture */}
+                  <video 
+                    ref={screenVideoRef} 
+                    className={`w-full h-full object-contain ${isScreenSharing && visualMode !== "file" ? "block" : "hidden"}`}
+                    muted 
+                    playsInline 
+                  />
+                  
+                  {(!isScreenSharing && (visualMode !== "file" || !uploadedImage)) ? (
+                    <div className="p-6 text-center space-y-2 max-w-md select-none z-10 relative">
+                      <div className="mx-auto w-10 h-10 rounded-full bg-slate-900/60 border border-white/5 flex items-center justify-center mb-1">
+                        <Monitor className="h-5 w-5 text-slate-500" />
+                      </div>
+                      <p className="text-[11px] font-mono text-[#00F2FF] uppercase tracking-wider">
+                        {lang === "uz" ? "AI vizual kanali o'chirilgan" : "AI optical channel offline"}
+                      </p>
+                      <p className="text-[10px] text-slate-400 leading-relaxed max-w-xs mx-auto">
+                        {lang === "uz" 
+                          ? "Ekranni translyatsiya qiling, kamerani yoqing yoki skrinshot rasmini joylang, shunda Jarvis uni bevosita tahlil qila oladi." 
+                          : "Start display sharing, activate the camera, or upload a photo to feed directly into Jarvis's vision engine."}
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Scanning visual lines overlay */}
+                      <div className="absolute inset-0 pointer-events-none bg-gradient-to-b from-[#00F2FF]/0 via-[#00F2FF]/2 to-[#00F2FF]/0 bg-[length:100%_4px] bg-repeat animate-laser-scan opacity-45 z-20" />
+                      <div className="absolute top-3 left-3 py-1 px-2.5 bg-red-950/80 border border-red-500/50 text-red-500 rounded font-mono text-[9px] font-bold uppercase tracking-widest flex items-center gap-1.5 animate-pulse select-none z-20">
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                        <span>LIVE STREAMING</span>
+                      </div>
+                      <div className="absolute bottom-3 right-3 py-1 px-2.5 bg-black/80 border border-[#00F2FF]/30 text-[#00F2FF] rounded font-mono text-[8px] font-bold uppercase tracking-widest select-none z-20 font-mono">
+                        {visualMode.toUpperCase()} // WFLOW_PORTAL_CORE // 240P_BUFF
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* COMPACT REAL-TIME SYSTEM LOGS CONSOLE */}
             <div className="glass-hologram p-5 rounded-2xl border border-[#00F2FF]/15 space-y-3 shadow-2xl w-full max-w-xl animate-holo-flicker">
