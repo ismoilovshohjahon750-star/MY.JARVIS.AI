@@ -11,7 +11,7 @@ dotenv.config();
 
 const app = express();
 const httpServer = http.createServer(app);
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(express.json({ limit: "25mb" }));
@@ -1154,7 +1154,7 @@ async function runServer() {
     });
   }
 
-  httpServer.listen(PORT, "0.0.0.0", () => {
+  httpServer.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server successfully running on port ${PORT}`);
   });
 }
