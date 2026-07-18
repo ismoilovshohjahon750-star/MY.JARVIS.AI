@@ -21,6 +21,27 @@ let isApiKeyExpired = false;
 let aiClient: GoogleGenAI | null = null;
 let lastInitialApiKey: string | undefined = undefined;
 
+// Groq key status flags to gracefully fallback when keys are revoked/invalid (401)
+let isGroqKeyExpired = false;
+let lastInitialGroqKey: string | undefined = undefined;
+
+function checkGroqError(error: any) {
+  if (!error) return;
+  const errMsg = error.message || error.toString() || "";
+  if (
+    errMsg.includes("401") ||
+    errMsg.toLowerCase().includes("unauthorized") ||
+    errMsg.toLowerCase().includes("unauthenticated") ||
+    errMsg.toLowerCase().includes("invalid api key") ||
+    errMsg.toLowerCase().includes("forbidden")
+  ) {
+    if (!isGroqKeyExpired) {
+      console.warn("Groq API Key Status: Expired, invalid, or unauthorized detected. Activating fallback.");
+      isGroqKeyExpired = true;
+    }
+  }
+}
+
 function checkApiKeyError(error: any) {
   if (!error) return;
   let errMsg = error.message || error.toString() || "";
@@ -78,7 +99,15 @@ function getGeminiClient(forceRetry = false): GoogleGenAI {
 }
 
 function isGroqReady(): boolean {
-  return typeof process.env.GROQ_API_KEY === "string" && process.env.GROQ_API_KEY.trim().length > 0;
+  const key = process.env.GROQ_API_KEY;
+  if (typeof key === "string" && key.trim().length > 0) {
+    if (key !== lastInitialGroqKey) {
+      isGroqKeyExpired = false;
+      lastInitialGroqKey = key;
+    }
+    return !isGroqKeyExpired;
+  }
+  return false;
 }
 
 async function transcribeAudioWithGroq(audioBase64: string): Promise<string> {
@@ -99,6 +128,9 @@ async function transcribeAudioWithGroq(audioBase64: string): Promise<string> {
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        isGroqKeyExpired = true;
+      }
       const errorText = await response.text();
       throw new Error(`Whisper API error: ${response.status} - ${errorText}`);
     }
@@ -107,6 +139,7 @@ async function transcribeAudioWithGroq(audioBase64: string): Promise<string> {
     return result.text || "";
   } catch (err: any) {
     console.error("transcribeAudioWithGroq error:", err);
+    checkGroqError(err);
     throw err;
   }
 }
@@ -116,7 +149,7 @@ async function generateChatWithGroq(messageText: string, history: any[]): Promis
     const messages = [
       {
         role: "system",
-        content: "Sizning ismingiz Jarvis. Siz foydalanuvchi bilan real vaqtda ovozli va vizual (ekran translyatsiyasi) muloqot quruvchi aqlli, do'stona AI yordamchisiz. Loyihangiz interfeysida real vaqtda audio muloqot, matnli chat xabarlashuv, va foydalanuvchi o'z ekranini ulashib ko'rsatishi (Screen Broadcast/Share canvas stream) va uni vizual tahlil qilishingiz uchun muloqot tizimi mavjud.\n\nIDENTITY RULES (MUHIM):\n1. Agar sizdan 'Seni kim yaratgan?' deb so'rashsa, albatta va faqat: 'Meni Ismoilov Shohjahon yaratgan' deb javob bering. Hech qachon botliy.uz, yaratuvchining yoshi, tug'ilgan yili yoki telegram manzili kabi boshqa ma'lumotlarni o'z-o'zidan aytmang.\n2. Yaratuvchining yoshi (15 yosh), tug'ilgan sanasi (12.24.2010 ya'ni 24-dekabr 2010-yil) va boshqa tafsilotlarni FAQAT va FAQAT foydalanuvchi buni alohida so'rasagina (masalan, 'Yaratuvching necha yoshda?', 'U qachon tug'ilgan?' deb so'ralsa) bersin.\n3. Agar yaratuvchingiz bilan qanday bog'lanishni so'rashsa (e.g. 'Yaratuvching bilan qanday bog'lansam bo'ladi?'), javobni faqat 'telegram:@shoh_deweloper' (yoki Telegram orqali @shoh_deweloper profiliga yozishlarini) deb bersin. Buni ham faqat so'ralgandagina aytsin.\n4. OpenAI, Google yoki boshqa kompaniya yaratgan deb umuman aytmang.\n\nJavobni quyidagi JSON formatida qaytaring, boshqa hech qanday izoh qo'shmang:\n{\n  \"userTranscript\": \"Transcribed text or empty if messageText is used\",\n  \"aiResponse\": \"Your voice-ready conversational spoken response\",\n  \"youtubeSearchQuery\": \"Song keyword request, or empty\"\n}"
+        content: "Sizning ismingiz Jarvis. Siz foydalanuvchi bilan real vaqtda ovozli va vizual (ekran translyatsiyasi) muloqot quruvchi aqlli, do'stona AI yordamchisiz. Loyihangiz interfeysida real vaqtda audio muloqot, matnli chat xabarlashuv, va foydalanuvchi o'z ekranini ulashib ko'rsatishi (Screen Broadcast/Share canvas stream) va uni vizual tahlil qilishingiz uchun muloqot tizimi mavjud.\n\nIDENTITY RULES (MUHIM):\n1. Agar sizdan 'Seni kim yaratgan?' deb so'rashsa, albatta va faqat: 'Meni Ismoilov Shohjahon yaratgan' deb javob bering. Hech qachon botliy.uz, yaratuvchining yoshi, tug'ilgan yili yoki telegram manzili kabi boshqa ma'lumotlarni o'z-o'zidan aytmang.\n2. Yaratuvchining yoshi (15 yosh), tug'ilgan sanasi (12.24.2010 ya'ni 24-dekabr 2010-yil) va boshqa tafsilotlarni FAQAT va FAQAT foydalanuvchi buni alohida so'rasagina (masalan, 'Yaratuvching necha yoshda?', 'U qachon tug'ilgan?' deb so'ralsa) bersin.\n3. Agar yaratuvchingiz bilan qanday bog'lanishni so'rashsa (e.g. 'Yaratuvching bilan qanday bog'lansam bo'ladi?'), javobni faqat 'telegram:@shoh_deweloper' (yoki Telegram orqali @shoh_deweloper profiliga yozishlarini) deb bersin. Buni ham faqat so'ralgandagina aytsin.\n4. OpenAI, Google yoki boshqa kompania yaratgan deb umuman aytmang.\n\nJavobni quyidagi JSON formatida qaytaring, boshqa hech qanday izoh qo'shmang:\n{\n  \"userTranscript\": \"Transcribed text or empty if messageText is used\",\n  \"aiResponse\": \"Your voice-ready conversational spoken response\",\n  \"youtubeSearchQuery\": \"Song keyword request, or empty\"\n}"
       }
     ];
 
@@ -151,6 +184,9 @@ async function generateChatWithGroq(messageText: string, history: any[]): Promis
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        isGroqKeyExpired = true;
+      }
       const errorText = await response.text();
       throw new Error(`Groq LLM error: ${response.status} - ${errorText}`);
     }
@@ -174,6 +210,7 @@ async function generateChatWithGroq(messageText: string, history: any[]): Promis
     }
   } catch (err: any) {
     console.error("generateChatWithGroq error:", err);
+    checkGroqError(err);
     throw err;
   }
 }
@@ -203,13 +240,17 @@ async function generateSimulatedChatWithGroq(query: string): Promise<string> {
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        isGroqKeyExpired = true;
+      }
       throw new Error(`Groq LLM simulation error: ${response.status}`);
     }
 
     const result: any = await response.json();
     return result.choices?.[0]?.message?.content || "";
-  } catch (err) {
+  } catch (err: any) {
     console.error("generateSimulatedChatWithGroq error:", err);
+    checkGroqError(err);
     throw err;
   }
 }
